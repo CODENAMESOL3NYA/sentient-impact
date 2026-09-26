@@ -51,7 +51,7 @@ export interface IAgentAdapter<TInput,TOutput>{
  */
 export class AgentACoachAdapter implements IAgentAdapter<{prId?: string; diff:string},{findings:CoachFinding[]; tokenUsage: TokenUsage }>{
     async execute(input: {prId?:string, diff:string}): Promise<{findings: CoachFinding[]; tokenUsage: TokenUsage }>{
-        await new Promise((resolve)=>setTimeout(resolve,1500));
+        await new Promise((resolve)=>setTimeout(resolve,Number(process.env.AGENT_SIMULATION_DELAY_MS)));
 
         // Estimate prompt tokens: base prompt size + diff length (rough char→token ratio of 4:1).
         const promptTokens = AGENT_A_PROMPT.tokenTarget + Math.ceil(input.diff.length / 4);
@@ -98,7 +98,7 @@ export class AgentACoachAdapter implements IAgentAdapter<{prId?: string; diff:st
 
 export class AgentBRadarAdapter implements IAgentAdapter<{prId?:string;diff:string},{blastRadius:BlastRadiusGraphPayload;riskScore:RiskScoreBreakdown;releaseNotes:ReleaseNotes;tokenUsage:TokenUsage}>{
     async execute(input:{prId?:string;diff:string}): Promise<{blastRadius:BlastRadiusGraphPayload;riskScore:RiskScoreBreakdown;releaseNotes:ReleaseNotes;tokenUsage:TokenUsage}>{
-        await new Promise((resolve)=>setTimeout(resolve,1500));
+        await new Promise((resolve)=>setTimeout(resolve,Number(process.env.AGENT_SIMULATION_DELAY_MS)));
 
         // Estimate prompt tokens: base prompt size + diff length (rough char→token ratio of 4:1).
         const promptTokens = AGENT_B_PROMPT.tokenTarget + Math.ceil(input.diff.length / 4);
