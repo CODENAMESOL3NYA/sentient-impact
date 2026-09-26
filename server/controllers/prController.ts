@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { diffCache } from "../utils/cache";
 import { agentACoachAdapter, agentBRadarAdapter, type PRAnalysisResponse } from "../adapters/agentAdapters";
-import { start } from "repl";
+import { BOBCOIN_ECONOMY } from "../../src/data/bobPrompts";
 
 /**
  * Interface defining the expected body payload for the analyze-pr route
@@ -64,7 +64,11 @@ export class PRAnalysisController{
             ]);
 
             const executionTimeMs = Date.now()-startTime;
-            const bobcoinsBilled = 1.25;
+
+            // Derive cost from actual token usage reported by each agent.
+            const totalPromptTokens     = coachResult.tokenUsage.promptTokens     + radarResult.tokenUsage.promptTokens;
+            const totalCompletionTokens = coachResult.tokenUsage.completionTokens + radarResult.tokenUsage.completionTokens;
+            const bobcoinsBilled        = BOBCOIN_ECONOMY.calculateCost(totalPromptTokens, totalCompletionTokens);
 
             const responsePayload:PRAnalysisResponse={
                 prId:prId||'custom-pr',

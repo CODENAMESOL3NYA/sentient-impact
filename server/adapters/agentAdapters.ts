@@ -1,4 +1,5 @@
 import { MOCK_PRS } from "@/src/data/mockPrData";
+import { AGENT_A_PROMPT, AGENT_B_PROMPT } from '../../src/data/bobPrompts';
 import type {
     CoachFinding,
     DependencyNode,
@@ -8,6 +9,16 @@ import type {
     ReleaseNotes,
     PullRequest
 } from '../../src/types/sentinal';
+
+/**
+ * Token usage reported by a single agent execution.
+ * In mock mode these are estimated from the prompt's tokenTarget and the diff length.
+ * In live mode the LLM response fills these fields directly.
+ */
+export interface TokenUsage {
+    promptTokens: number;
+    completionTokens: number;
+}
 
 //Interface to represent the blast-radius network graph
 export interface BlastRadiusGraphPayload{
@@ -38,10 +49,13 @@ export interface IAgentAdapter<TInput,TOutput>{
  * Adapter A: The Code Review Coach
  * It Analyzes exact changed lines, flagging standard violations and security risks
  */
-export class AgentACoachAdapter implements IAgentAdapter<{prId?: string; diff:string},{findings:CoachFinding[] }>{
-    async execute(input: {prId?:string, diff:string}): Promise<{findings: CoachFinding[] }>{
+export class AgentACoachAdapter implements IAgentAdapter<{prId?: string; diff:string},{findings:CoachFinding[]; tokenUsage: TokenUsage }>{
+    async execute(input: {prId?:string, diff:string}): Promise<{findings: CoachFinding[]; tokenUsage: TokenUsage }>{
         await new Promise((resolve)=>setTimeout(resolve,1500));
 
+        // Estimate prompt tokens: base prompt size + diff length (rough char→token ratio of 4:1).
+        const promptTokens = AGENT_A_PROMPT.tokenTarget + Math.ceil(input.diff.length / 4);
+        // Estimate completion tokens: one finding ≈ 120 tokens on average.
         const matchedPr = MOCK_PRS.find((p:PullRequest)=>p.id===input.prId)|| MOCK_PRS[0];
 
         //Check if diff contains specific security keywords to dynamically flag if custom diff
@@ -61,15 +75,18 @@ export class AgentACoachAdapter implements IAgentAdapter<{prId?: string; diff:st
                     educationalRationale:'When verifying JSON Web Tokens, always enforce the expected signing algorithm (e.g. algorithms: ["HS256"]) to prevent forging signatures with "none" or asymmetric/symmetric confusion.',
                     suggestedFix:'jwt.verify(token, secret, { algorithms: ["HS256"] });',
                     codeSnippet:'jwt.verify(token, secret);'
-          
                 });
             }
             if(customFindings.length>0){
-                return {findings:customFindings}
+                return {
+                    findings: customFindings,
+                    tokenUsage: { promptTokens, completionTokens: customFindings.length * 120 },
+                };
             }
         }
         return {
-            findings:matchedPr.findings,
+            findings: matchedPr.findings,
+            tokenUsage: { promptTokens, completionTokens: matchedPr.findings.length * 120 },
         };
     }
 }
@@ -79,11 +96,19 @@ export class AgentACoachAdapter implements IAgentAdapter<{prId?: string; diff:st
  * Maps downstream dependencies,callers,public API routes and calculates risk score.
  */
 
-export class AgentBRadarAdapter implements IAgentAdapter<{prId?:string;diff:string},{blastRadius:BlastRadiusGraphPayload;riskScore:RiskScoreBreakdown;releaseNotes: ReleaseNotes}>{
-    async execute(input:{prId?:string;diff:string}): Promise<{blastRadius: BlastRadiusGraphPayload; riskScore:RiskScoreBreakdown; releaseNotes: ReleaseNotes}>{
+export class AgentBRadarAdapter implements IAgentAdapter<{prId?:string;diff:string},{blastRadius:BlastRadiusGraphPayload;riskScore:RiskScoreBreakdown;releaseNotes:ReleaseNotes;tokenUsage:TokenUsage}>{
+    async execute(input:{prId?:string;diff:string}): Promise<{blastRadius:BlastRadiusGraphPayload;riskScore:RiskScoreBreakdown;releaseNotes:ReleaseNotes;tokenUsage:TokenUsage}>{
         await new Promise((resolve)=>setTimeout(resolve,1500));
 
+        // Estimate prompt tokens: base prompt size + diff length (rough char→token ratio of 4:1).
+        const promptTokens = AGENT_B_PROMPT.tokenTarget + Math.ceil(input.diff.length / 4);
         const matchedPr = MOCK_PRS.find((p:PullRequest)=>p.id===input.prId)|| MOCK_PRS[0];
+
+        // Estimate completion tokens: graph nodes + edges + table rows each cost ~80 tokens.
+        const completionTokens =
+            (matchedPr.dependencyGraph.nodes.length +
+             matchedPr.dependencyGraph.edges.length +
+             matchedPr.blastRadiusTable.length) * 80;
 
         return{
             blastRadius:{
@@ -93,6 +118,7 @@ export class AgentBRadarAdapter implements IAgentAdapter<{prId?:string;diff:stri
             },
             riskScore:matchedPr.riskScore,
             releaseNotes:matchedPr.releaseNotes,
+            tokenUsage: { promptTokens, completionTokens },
         };
     }
 }
