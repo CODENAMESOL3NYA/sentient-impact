@@ -1,6 +1,6 @@
 import type { PullRequest, BobSessionLog } from "../types/sentinal";
 
-export const MORK_PRS: PullRequest[] = [
+export const MOCK_PRS: PullRequest[] = [
     {
         id: 'pr-142',
         number: 142,
