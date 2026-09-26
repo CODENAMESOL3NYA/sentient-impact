@@ -1,7 +1,7 @@
 /**
  * Bob System Prompts
  */
-export interface BobAgentPromp {
+export interface BobAgentPrompt {
     id: string;
     name: string;
     role: string;
@@ -9,7 +9,7 @@ export interface BobAgentPromp {
     bobcoinEstimate: number;
     systemPrompt: string;
     inputTemplate: string;
-    outputJSONSchema: string;
+    outputJsonSchema: string;
     tokenSavingTechniques: string[];
 }
 
@@ -59,12 +59,15 @@ CRITICAL INSTRUCTIONS:
     ]
 };
 
+const PROMPT_TOKEN_RATE = 25000;
+const COMPLETION_TOKEN_RATE = 10000;
+
 export const BOBCOIN_ECONOMY = {
     totalBudget: 40.0,
-    promptTokenRate: 25000,
-    completionTokenRate: 10000,
+    promptTokenRate: PROMPT_TOKEN_RATE,
+    completionTokenRate: COMPLETION_TOKEN_RATE,
     calculateCost: (promptTokens: number, completionTokens: number): number => {
-        const cost = (promptTokens / 25000) + (completionTokens / 10000);
-        return Math.round(cost * 1000) / 1000;
+        const cost = (promptTokens / PROMPT_TOKEN_RATE) + (completionTokens / COMPLETION_TOKEN_RATE);
+        return parseFloat(cost.toFixed(3));
     }
-}
+};
