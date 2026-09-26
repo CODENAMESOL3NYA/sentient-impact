@@ -36,7 +36,7 @@ export class AppError extends Error{
  */
 export function errorHandler(err:Error|AppError,req:Request,res:Response,next:NextFunction):void{
     const statusCode = 'statusCode' in err ? err.statusCode: 500;
-    const isTimeout = err.message.toLowerCase().includes('timeout') || err.message.toLowerCase().includes('timed out');
+    const isTimeout = err.name === 'AbortError' || err.name === 'TimeoutError';
 
     const errorPayload:ApiErrorResponse={
         error:isTimeout?'AI_AGENT_TIMEOUT':err.name || 'INTERNAL_SERVER_ERROR',
