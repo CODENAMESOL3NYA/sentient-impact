@@ -59,6 +59,81 @@ CRITICAL INSTRUCTIONS:
     ]
 };
 
+export const AGENT_B_PROMPT: BobAgentPrompt={
+    id: 'agent-b-radar',
+    name: 'Agent B: The Blast-Radius Radar',
+    role: 'Maps imports/exports, calculates downstream impact propagation, and produces a system-wide Risk Score.',
+    tokenTarget: 840,
+    bobcoinEstimate: 0.48,
+    systemPrompt:`You are Agent B (The Radar) in Impact Sentinel.
+Your objective is to map dependency fanout and calculate the blast radius of code modifications.
+Analyze:
+1. Exported interface mutations, renamed functions, or changed argument signatures.
+2. Downstream components (controllers, background workers, external API endpoints, DB entities).
+3. Compute a deterministic Risk Score (0-100) using this exact weighted formula:
+   RiskScore = (BreakingApiSurface [max 35]) + (DownstreamFanout [max 25]) + (SecurityCriticality [max 25]) + (TestCoverageDelta [max 15])
+
+CRITICAL INSTRUCTIONS:
+- Output ONLY valid JSON matching the exact schema below.
+- Zero markdown code fences.
+- Return explicit nodes and edges for SVG DAG rendering.`,
+  inputTemplate: `{
+  "modifiedFiles": ["src/middleware/authMiddleware.ts", "src/types/auth.ts"],
+  "diff": "<UNIFIED_GIT_DIFF>",
+  "projectDependencyManifest": "<SUMMARY_OF_IMPORTS>"
+}`,
+outputJsonSchema:`{
+  "riskScore": {
+    "overallScore": 82,
+    "riskTier": "CRITICAL" | "HIGH" | "MODERATE" | "LOW",
+    "factors": {
+      "breakingApiSurface": 32,
+      "downstreamFanout": 22,
+      "securityCriticality": 20,
+      "testCoverageDelta": 8
+    },
+    "summary": "1-sentence executive risk assessment"
+  },
+  "dependencyGraph": {
+    "nodes": [
+      {
+        "id": "nodeId",
+        "label": "File or Service Name",
+        "type": "modified_file" | "direct_consumer" | "service" | "api_endpoint" | "database_model",
+        "risk": "critical" | "high" | "medium" | "low",
+        "fanoutCount": 4,
+        "tier": 0 | 1 | 2 | 3,
+        "description": "Role in system"
+      }
+    ],
+    "edges": [
+      {
+        "source": "nodeId1",
+        "target": "nodeId2",
+        "relation": "imports" | "invokes" | "queries" | "exposes",
+        "isBreakingChange": true | false
+      }
+    ]
+  },
+  "blastRadiusTable": [
+    {
+      "dependentComponent": "src/services/billingGateway.ts",
+      "componentType": "Microservice",
+      "impactType": "Breaking API Contract" | "Runtime Error Risk" | "Schema Incompatibility" | "Cache Invalidation Gap",
+      "severity": "critical" | "high" | "medium" | "low",
+      "affectedCallers": 8,
+      "recommendedTest": "Actionable regression test command"
+    }
+  ]
+}`,
+tokenSavingTechniques:[
+    'Condensed graph representation using adjacency edge pairs',
+    'Pre-filtered AST tokens to avoid sending entire repository trees',
+    'Eliminates verbose coordinate math by having frontend compute SVG layout coordinates',
+    'Deterministic scoring clamps values to integer ranges to minimize output tokens'
+  ]
+};
+
 const PROMPT_TOKEN_RATE = 25000;
 const COMPLETION_TOKEN_RATE = 10000;
 
