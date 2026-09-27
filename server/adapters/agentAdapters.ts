@@ -57,7 +57,18 @@ export class AgentACoachAdapter implements IAgentAdapter<{prId?: string; diff:st
         // Estimate prompt tokens: base prompt size + diff length (rough char→token ratio of 4:1).
         const promptTokens = AGENT_A_PROMPT.tokenTarget + Math.ceil(input.diff.length / 4);
         // Estimate completion tokens: one finding ≈ 120 tokens on average.
-        const matchedPr = MOCK_PRS.find((p:PullRequest)=>p.id===input.prId)|| MOCK_PRS[0];
+        const matchedPr = MOCK_PRS.find((p:PullRequest)=>p.id===input.prId);
+
+        // If a prId was provided but doesn't match any seeded mock, return empty findings
+        // rather than silently injecting mock data that belongs to a different PR.
+        if(input.prId && !matchedPr){
+            return {
+                findings: [],
+                tokenUsage: { promptTokens, completionTokens: 0 },
+            };
+        }
+
+        const pr = matchedPr ?? MOCK_PRS[0];
 
         //Check if diff contains specific security keywords to dynamically flag if custom diff
         if(!input.prId && input.diff){
@@ -86,8 +97,8 @@ export class AgentACoachAdapter implements IAgentAdapter<{prId?: string; diff:st
             }
         }
         return {
-            findings: matchedPr.findings,
-            tokenUsage: { promptTokens, completionTokens: matchedPr.findings.length * 120 },
+            findings: pr.findings,
+            tokenUsage: { promptTokens, completionTokens: pr.findings.length * 120 },
         };
     }
 }
@@ -103,22 +114,48 @@ export class AgentBRadarAdapter implements IAgentAdapter<{prId?:string;diff:stri
 
         // Estimate prompt tokens: base prompt size + diff length (rough char→token ratio of 4:1).
         const promptTokens = AGENT_B_PROMPT.tokenTarget + Math.ceil(input.diff.length / 4);
-        const matchedPr = MOCK_PRS.find((p:PullRequest)=>p.id===input.prId)|| MOCK_PRS[0];
+        const matchedPr = MOCK_PRS.find((p:PullRequest)=>p.id===input.prId);
+
+        // If a prId was provided but doesn't match any seeded mock, return an empty result
+        // rather than silently returning blast-radius data that belongs to a different PR.
+        if(input.prId && !matchedPr){
+            return {
+                blastRadius: { nodes: [], edges: [], table: [] },
+                riskScore: {
+                    overallScore: 0,
+                    riskTier: 'LOW',
+                    factors: { breakingApiSurface: 0, downstreamFanout: 0, securityCriticality: 0, testCoverageDelta: 0 },
+                    summary: 'No mock data available for this PR.',
+                },
+                releaseNotes: {
+                    title: 'Release Notes',
+                    versionTarget: 'TBD',
+                    executiveSummary: '',
+                    breakingChanges: [],
+                    downstreamServicesToAlert: [],
+                    qaChecklist: [],
+                    rollbackPlan: [],
+                },
+                tokenUsage: { promptTokens, completionTokens: 0 },
+            };
+        }
+
+        const pr = matchedPr ?? MOCK_PRS[0];
 
         // Estimate completion tokens: graph nodes + edges + table rows each cost ~80 tokens.
         const completionTokens =
-            (matchedPr.dependencyGraph.nodes.length +
-             matchedPr.dependencyGraph.edges.length +
-             matchedPr.blastRadiusTable.length) * 80;
+            (pr.dependencyGraph.nodes.length +
+             pr.dependencyGraph.edges.length +
+             pr.blastRadiusTable.length) * 80;
 
         return{
             blastRadius:{
-                nodes:matchedPr.dependencyGraph.nodes,
-                edges:matchedPr.dependencyGraph.edges,
-                table:matchedPr.blastRadiusTable,
+                nodes:pr.dependencyGraph.nodes,
+                edges:pr.dependencyGraph.edges,
+                table:pr.blastRadiusTable,
             },
-            riskScore:matchedPr.riskScore,
-            releaseNotes:matchedPr.releaseNotes,
+            riskScore:pr.riskScore,
+            releaseNotes:pr.releaseNotes,
             tokenUsage: { promptTokens, completionTokens },
         };
     }
@@ -188,11 +225,11 @@ export class WatsonxAgentACoachAdapter
  */
 export class WatsonxAgentBRadarAdapter
     implements IAgentAdapter<
-        { prId?: string; diff: string },
+        { prId?: string; diff: string; modifiedFiles?: string[] },
         { blastRadius: BlastRadiusGraphPayload; riskScore: RiskScoreBreakdown; releaseNotes: ReleaseNotes; tokenUsage: TokenUsage }
     >
 {
-    async execute(input: { prId?: string; diff: string }): Promise<{
+    async execute(input: { prId?: string; diff: string; modifiedFiles?: string[] }): Promise<{
         blastRadius: BlastRadiusGraphPayload;
         riskScore: RiskScoreBreakdown;
         releaseNotes: ReleaseNotes;
@@ -200,8 +237,18 @@ export class WatsonxAgentBRadarAdapter
     }> {
         const client = getWatsonxClient();
 
+        // Build the modifiedFiles JSON array from explicit input or extract from diff headers.
+        let fileListJson: string;
+        if (input.modifiedFiles && input.modifiedFiles.length > 0) {
+            fileListJson = input.modifiedFiles.map(f => `"${f}"`).join(', ');
+        } else {
+            // Extract filenames from +++ b/<path> lines in the unified diff.
+            const extracted = [...input.diff.matchAll(/^\+\+\+ b\/(.+)$/gm)].map(m => `"${m[1]}"`);
+            fileListJson = extracted.length > 0 ? extracted.join(', ') : '"unknown"';
+        }
+
         const userContent = AGENT_B_PROMPT.inputTemplate
-            .replace('"src/middleware/authMiddleware.ts", "src/types/auth.ts"', `"${input.prId ?? 'custom'}"`)
+            .replace('"src/middleware/authMiddleware.ts", "src/types/auth.ts"', fileListJson)
             .replace('<UNIFIED_GIT_DIFF>', input.diff)
             .replace('<SUMMARY_OF_IMPORTS>', 'See diff above.');
 
