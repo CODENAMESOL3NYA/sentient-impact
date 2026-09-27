@@ -3,6 +3,15 @@ import { AppError } from '../middleware/errorHandler.js';
 /** Default maximum diff size forwarded to the analysis pipeline. */
 const DEFAULT_DIFF_MAX_CHARS = 40_000;
 
+/**
+ * Default request timeout in milliseconds.
+ * Override via GITHUB_REQUEST_TIMEOUT_MS env var.
+ */
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+
+/** Maximum number of attempts before failing (1 = no retry). */
+const MAX_ATTEMPTS = 2;
+
 /** Lightweight PR metadata returned by listPullRequests. */
 export interface GitHubPRSummary {
     number: number;
@@ -48,11 +57,13 @@ interface GitHubFileEntry {
 class GitHubClient {
     private readonly token: string | undefined;
     private readonly diffMaxChars: number;
+    private readonly timeoutMs: number;
     private readonly baseUrl = 'https://api.github.com';
 
     constructor() {
         this.token = process.env.GITHUB_TOKEN;
         this.diffMaxChars = Number(process.env.DIFF_MAX_CHARS) || DEFAULT_DIFF_MAX_CHARS;
+        this.timeoutMs = Number(process.env.GITHUB_REQUEST_TIMEOUT_MS) || DEFAULT_REQUEST_TIMEOUT_MS;
 
         if (!this.token) {
             console.warn(
@@ -78,8 +89,39 @@ class GitHubClient {
         return headers;
     }
 
-    private async githubFetch(url: string): Promise<Response> {
-        const response = await fetch(url, { headers: this.buildHeaders() });
+    private async githubFetch(url: string, attempt = 1): Promise<Response> {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+
+        let response: Response;
+        try {
+            response = await fetch(url, {
+                headers: this.buildHeaders(),
+                signal: controller.signal,
+            });
+        } catch (err) {
+            clearTimeout(timer);
+            const isTimeout =
+                err instanceof Error &&
+                (err.name === 'AbortError' ||
+                 // undici surfaces connect timeouts as TypeError with a ConnectTimeoutError cause
+                 (err.name === 'TypeError' && (err as NodeJS.ErrnoException).cause !== undefined));
+
+            if (isTimeout && attempt < MAX_ATTEMPTS) {
+                console.warn(`[GitHubClient] Request timed out (attempt ${attempt}/${MAX_ATTEMPTS}), retrying: ${url}`);
+                // Brief back-off before retry (500 ms × attempt number).
+                await new Promise(resolve => setTimeout(resolve, 500 * attempt));
+                return this.githubFetch(url, attempt + 1);
+            }
+
+            throw new AppError(
+                `GitHub API request timed out after ${this.timeoutMs}ms. ` +
+                'Check your network connectivity or set GITHUB_REQUEST_TIMEOUT_MS to a higher value.',
+                504
+            );
+        } finally {
+            clearTimeout(timer);
+        }
 
         // Warn when approaching the rate limit.
         const remaining = Number(response.headers.get('X-RateLimit-Remaining') ?? Infinity);

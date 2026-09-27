@@ -131,7 +131,7 @@ export class DiffCacheService{
      */
     public clear():void{
         this.cache.clear();
-        this.stats.totalKeys=0;
+        this.stats = { totalKeys: 0, hits: 0, misses: 0, totalBobcoinSaved: 0, evictions: 0 };
     }
 }
 

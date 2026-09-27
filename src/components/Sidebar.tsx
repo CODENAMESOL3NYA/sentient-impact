@@ -1,15 +1,18 @@
 import { useState } from 'react';
 import { Loader2, Search, GitPullRequest, GitBranch, ChevronRight } from 'lucide-react';
 import type { GitHubPRSummary } from '../../server/services/githubClient';
+import type { LLMProvider } from '../App';
 
 interface Props {
   selectedPR: GitHubPRSummary | null;
   isAnalyzing: boolean;
   onSelectPR: (pr: GitHubPRSummary, owner: string, repo: string) => void;
   onAnalyze: (pr: GitHubPRSummary) => void;
+  provider: LLMProvider;
+  onProviderChange: (p: LLMProvider) => void;
 }
 
-export default function Sidebar({ selectedPR, isAnalyzing, onSelectPR, onAnalyze }: Props) {
+export default function Sidebar({ selectedPR, isAnalyzing, onSelectPR, onAnalyze, provider, onProviderChange }: Props) {
   const [owner, setOwner] = useState('');
   const [repo, setRepo] = useState('');
   const [prs, setPrs] = useState<GitHubPRSummary[]>([]);
@@ -46,6 +49,36 @@ export default function Sidebar({ selectedPR, isAnalyzing, onSelectPR, onAnalyze
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#0d1117' }}>
+
+      {/* ── Provider toggle ── */}
+      <div style={{ padding: '10px 16px', borderBottom: '1px solid #21262d', flexShrink: 0 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: '#8b949e', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>
+          AI Provider
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {(['watsonx', 'gemini'] as LLMProvider[]).map(p => (
+            <button
+              key={p}
+              onClick={() => onProviderChange(p)}
+              style={{
+                flex: 1,
+                padding: '5px 0',
+                borderRadius: 6,
+                border: `1px solid ${provider === p ? '#58a6ff' : '#30363d'}`,
+                backgroundColor: provider === p ? '#1f3a5f' : '#21262d',
+                color: provider === p ? '#58a6ff' : '#8b949e',
+                fontSize: 12,
+                fontWeight: provider === p ? 600 : 400,
+                cursor: 'pointer',
+                transition: 'all 0.1s',
+                textTransform: 'capitalize',
+              }}
+            >
+              {p === 'watsonx' ? 'watsonx' : 'Gemini'}
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* ── Header ── */}
       <div style={{ padding: '14px 16px 12px', borderBottom: '1px solid #21262d', flexShrink: 0 }}>

@@ -1,5 +1,6 @@
 import { IamAuthenticator } from 'ibm-cloud-sdk-core';
 import { WatsonXAI } from '@ibm-cloud/watsonx-ai';
+import type { LLMClient } from './llmClient.js';
 
 /**
  * The shape returned by a single textChat call.
@@ -21,7 +22,7 @@ export interface WatsonxChatResult {
  *   WATSONX_PROJECT_ID  – watsonx.ai project ID
  *   WATSONX_URL         – e.g. https://us-south.ml.cloud.ibm.com
  */
-class WatsonxClient {
+class WatsonxClient implements LLMClient {
     private readonly client: WatsonXAI;
     private readonly projectId: string;
     private readonly modelId: string;

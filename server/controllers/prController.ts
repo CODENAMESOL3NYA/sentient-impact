@@ -3,11 +3,12 @@ import { diffCache } from "../utils/cache";
 import {
     agentACoachAdapter,
     agentBRadarAdapter,
-    watsonxAgentACoachAdapter,
-    watsonxAgentBRadarAdapter,
+    liveAgentACoachAdapter,
+    liveAgentBRadarAdapter,
     type PRAnalysisResponse,
 } from "../adapters/agentAdapters";
 import { BOBCOIN_ECONOMY } from "../../src/data/bobPrompts";
+import { resolveProvider } from "../services/llmClientFactory";
 
 /**
  * Interface defining the expected body payload for the analyze-pr route
@@ -17,6 +18,7 @@ export interface AnalyzePRRequestBody{
     prId?:string;
     diff:string;
     bypassCache?:boolean;
+    provider?: 'watsonx' | 'gemini';
 }
 
 /**
@@ -37,8 +39,8 @@ export class PRAnalysisController{
         const startTime = Date.now();
 
         try {
-            const {prId, diff,bypassCache = false} = req.body as AnalyzePRRequestBody;
-            
+            const { prId, diff, bypassCache = false, provider } = req.body as AnalyzePRRequestBody;
+
             if(!diff || typeof diff !== 'string' || diff.trim().length ===0){
                 res.status(400).json({
                     error:'BAD_REQUEST',
@@ -48,7 +50,8 @@ export class PRAnalysisController{
                 return;
             }
 
-            const cacheKey = diffCache.generateDiffHash(diff,prId);
+            const resolvedProvider = resolveProvider(provider);
+            const cacheKey = diffCache.generateDiffHash(`${resolvedProvider}::${diff}`, prId);
 
             if(!bypassCache){
                 const cachedResult = diffCache.get<PRAnalysisResponse>(cacheKey);
@@ -65,12 +68,12 @@ export class PRAnalysisController{
             }
 
             const useLive = process.env.USE_LIVE_LLM === 'true';
-            const coachAdapter = useLive ? watsonxAgentACoachAdapter : agentACoachAdapter;
-            const radarAdapter  = useLive ? watsonxAgentBRadarAdapter  : agentBRadarAdapter;
+            const coachAdapter = useLive ? liveAgentACoachAdapter : agentACoachAdapter;
+            const radarAdapter  = useLive ? liveAgentBRadarAdapter  : agentBRadarAdapter;
 
             const [coachResult,radarResult]=await Promise.all([
-                coachAdapter.execute({prId,diff}),
-                radarAdapter.execute({prId,diff})
+                coachAdapter.execute({ prId, diff, provider: resolvedProvider }),
+                radarAdapter.execute({ prId, diff, provider: resolvedProvider }),
             ]);
 
             const executionTimeMs = Date.now()-startTime;
@@ -82,7 +85,7 @@ export class PRAnalysisController{
 
             const responsePayload:PRAnalysisResponse={
                 prId:prId||'custom-pr',
-                source: useLive ? 'watsonx_live' : 'mock_adapter',
+                source: useLive ? `${resolvedProvider}_live` as 'watsonx_live'|'gemini_live' : 'mock_adapter',
                 executionTimeMs,
                 bobcoinsBilled,
                 cacheKey,

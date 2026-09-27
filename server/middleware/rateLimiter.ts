@@ -44,7 +44,12 @@ export function createRateLimiter(options: RateLimiterOptions = {}): RequestHand
     sweepInterval.unref();
 
     return function rateLimiter(req: Request, res: Response, next: NextFunction): void {
-        const ip  = (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0].trim()
+        // req.ip respects Express's `trust proxy` setting and is the safest source.
+        // X-Forwarded-For is only read as a fallback and uses the leftmost (client) IP,
+        // which can be spoofed when the server is not behind a trusted reverse proxy.
+        // Set `app.set('trust proxy', 1)` in server.ts if deployed behind a load balancer.
+        const ip  = req.ip
+                 ?? (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0].trim()
                  ?? req.socket.remoteAddress
                  ?? 'unknown';
 

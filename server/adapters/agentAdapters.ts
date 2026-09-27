@@ -1,6 +1,6 @@
 import { MOCK_PRS } from "@/src/data/mockPrData";
 import { AGENT_A_PROMPT, AGENT_B_PROMPT } from '../../src/data/bobPrompts';
-import { getWatsonxClient } from '../services/watsonxClient';
+import { getLLMClient } from '../services/llmClientFactory';
 import type {
     CoachFinding,
     DependencyNode,
@@ -32,7 +32,7 @@ export interface BlastRadiusGraphPayload{
 
 export interface PRAnalysisResponse {
     prId: string;
-    source: 'cache'|'mock_adapter'|'watsonx_live';
+    source: 'cache'|'mock_adapter'|'watsonx_live'|'gemini_live';
     executionTimeMs:number;
     bobcoinsBilled:number;
     cacheKey:string;
@@ -177,15 +177,17 @@ function stripCodeFences(raw: string): string {
 }
 
 /**
- * Live Adapter A: The Code Review Coach (watsonx)
+ * Live Adapter A: The Code Review Coach
  * Sends the real diff to a foundation model and parses the JSON response
  * into CoachFinding[] with real token usage.
+ * Accepts an optional `provider` field so each request routes to the correct
+ * LLM client without touching any shared global state.
  */
-export class WatsonxAgentACoachAdapter
-    implements IAgentAdapter<{ prId?: string; diff: string }, { findings: CoachFinding[]; tokenUsage: TokenUsage }>
+export class LiveAgentACoachAdapter
+    implements IAgentAdapter<{ prId?: string; diff: string; provider?: string }, { findings: CoachFinding[]; tokenUsage: TokenUsage }>
 {
-    async execute(input: { prId?: string; diff: string }): Promise<{ findings: CoachFinding[]; tokenUsage: TokenUsage }> {
-        const client = getWatsonxClient();
+    async execute(input: { prId?: string; diff: string; provider?: string }): Promise<{ findings: CoachFinding[]; tokenUsage: TokenUsage }> {
+        const client = getLLMClient(input.provider);
 
         const userContent = AGENT_A_PROMPT.inputTemplate
             .replace('<PR_TITLE>', input.prId ?? 'Custom PR')
@@ -202,13 +204,13 @@ export class WatsonxAgentACoachAdapter
         try {
             parsed = JSON.parse(stripCodeFences(text));
         } catch {
-            throw new Error(`[WatsonxAgentA] Failed to parse model response as JSON.\nRaw output:\n${text}`);
+            throw new Error(`[LiveAgentA] Failed to parse model response as JSON.\nRaw output:\n${text}`);
         }
 
         // Ensure every finding has a unique id (model may omit it).
         const findings: CoachFinding[] = (parsed.findings ?? []).map((f, i) => ({
             ...f,
-            id: f.id ?? `wx-a-finding-${i}`,
+            id: f.id ?? `live-a-finding-${i}`,
         }));
 
         return {
@@ -219,23 +221,25 @@ export class WatsonxAgentACoachAdapter
 }
 
 /**
- * Live Adapter B: The Blast-Radius Radar (watsonx)
+ * Live Adapter B: The Blast-Radius Radar
  * Sends the real diff to a foundation model and parses the JSON response
  * into blast-radius graph, risk score, and release notes with real token usage.
+ * Accepts an optional `provider` field so each request routes to the correct
+ * LLM client without touching any shared global state.
  */
-export class WatsonxAgentBRadarAdapter
+export class LiveAgentBRadarAdapter
     implements IAgentAdapter<
-        { prId?: string; diff: string; modifiedFiles?: string[] },
+        { prId?: string; diff: string; modifiedFiles?: string[]; provider?: string },
         { blastRadius: BlastRadiusGraphPayload; riskScore: RiskScoreBreakdown; releaseNotes: ReleaseNotes; tokenUsage: TokenUsage }
     >
 {
-    async execute(input: { prId?: string; diff: string; modifiedFiles?: string[] }): Promise<{
+    async execute(input: { prId?: string; diff: string; modifiedFiles?: string[]; provider?: string }): Promise<{
         blastRadius: BlastRadiusGraphPayload;
         riskScore: RiskScoreBreakdown;
         releaseNotes: ReleaseNotes;
         tokenUsage: TokenUsage;
     }> {
-        const client = getWatsonxClient();
+        const client = getLLMClient(input.provider);
 
         // Build the modifiedFiles JSON array from explicit input or extract from diff headers.
         let fileListJson: string;
@@ -293,5 +297,10 @@ export class WatsonxAgentBRadarAdapter
     }
 }
 
-export const watsonxAgentACoachAdapter = new WatsonxAgentACoachAdapter();
-export const watsonxAgentBRadarAdapter = new WatsonxAgentBRadarAdapter();
+/** @deprecated Use liveAgentACoachAdapter */
+export const watsonxAgentACoachAdapter = new LiveAgentACoachAdapter();
+/** @deprecated Use liveAgentBRadarAdapter */
+export const watsonxAgentBRadarAdapter = new LiveAgentBRadarAdapter();
+
+export const liveAgentACoachAdapter = new LiveAgentACoachAdapter();
+export const liveAgentBRadarAdapter = new LiveAgentBRadarAdapter();

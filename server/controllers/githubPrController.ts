@@ -5,11 +5,12 @@ import { diffCache } from '../utils/cache.js';
 import {
     agentACoachAdapter,
     agentBRadarAdapter,
-    watsonxAgentACoachAdapter,
-    watsonxAgentBRadarAdapter,
+    liveAgentACoachAdapter,
+    liveAgentBRadarAdapter,
     type PRAnalysisResponse,
 } from '../adapters/agentAdapters.js';
 import { BOBCOIN_ECONOMY } from '../../src/data/bobPrompts.js';
+import { resolveProvider } from '../services/llmClientFactory.js';
 
 /**
  * Controller for the GitHub-sourced PR analysis routes.
@@ -52,11 +53,12 @@ export class GitHubPrController {
         const startTime = Date.now();
 
         try {
-            const { owner, repo, prNumber, bypassCache = false } = req.body as {
+            const { owner, repo, prNumber, bypassCache = false, provider } = req.body as {
                 owner?: unknown;
                 repo?: unknown;
                 prNumber?: unknown;
                 bypassCache?: boolean;
+                provider?: 'watsonx' | 'gemini';
             };
 
             // Validate owner and repo.
@@ -76,9 +78,12 @@ export class GitHubPrController {
             const ownerStr = owner.trim();
             const repoStr = repo.trim();
 
-            // Namespace the cache key so it never collides with mock IDs like 'pr-142'.
+            const resolvedProvider = resolveProvider(provider);
+
+            // Namespace the cache key so it never collides with mock IDs like 'pr-142',
+            // and include the provider so switching providers always produces a fresh result.
             const prId = `${ownerStr}/${repoStr}#${parsedPrNumber}`;
-            const cacheKey = diffCache.generateDiffHash('', prId);
+            const cacheKey = diffCache.generateDiffHash(`${resolvedProvider}::`, prId);
 
             if (!bypassCache) {
                 const cachedResult = diffCache.get<PRAnalysisResponse>(cacheKey);
@@ -107,12 +112,12 @@ export class GitHubPrController {
             }
 
             const useLive = process.env.USE_LIVE_LLM === 'true';
-            const coachAdapter = useLive ? watsonxAgentACoachAdapter : agentACoachAdapter;
-            const radarAdapter  = useLive ? watsonxAgentBRadarAdapter  : agentBRadarAdapter;
+            const coachAdapter = useLive ? liveAgentACoachAdapter : agentACoachAdapter;
+            const radarAdapter  = useLive ? liveAgentBRadarAdapter  : agentBRadarAdapter;
 
             const [coachResult, radarResult] = await Promise.all([
-                coachAdapter.execute({ prId, diff }),
-                radarAdapter.execute({ prId, diff, modifiedFiles }),
+                coachAdapter.execute({ prId, diff, provider: resolvedProvider }),
+                radarAdapter.execute({ prId, diff, modifiedFiles, provider: resolvedProvider }),
             ]);
 
             const executionTimeMs = Date.now() - startTime;
@@ -123,7 +128,7 @@ export class GitHubPrController {
 
             const responsePayload: PRAnalysisResponse = {
                 prId,
-                source: useLive ? 'watsonx_live' : 'mock_adapter',
+                source: useLive ? `${resolvedProvider}_live` as 'watsonx_live' | 'gemini_live' : 'mock_adapter',
                 executionTimeMs,
                 bobcoinsBilled,
                 cacheKey,
