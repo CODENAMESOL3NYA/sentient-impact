@@ -1,7 +1,13 @@
 import type { Request, Response, NextFunction } from "express";
 import { diffCache } from "../utils/cache";
-import { agentACoachAdapter, agentBRadarAdapter, type PRAnalysisResponse } from "../adapters/agentAdapters";
-import { start } from "repl";
+import {
+    agentACoachAdapter,
+    agentBRadarAdapter,
+    watsonxAgentACoachAdapter,
+    watsonxAgentBRadarAdapter,
+    type PRAnalysisResponse,
+} from "../adapters/agentAdapters";
+import { BOBCOIN_ECONOMY } from "../../src/data/bobPrompts";
 
 /**
  * Interface defining the expected body payload for the analyze-pr route
@@ -58,17 +64,25 @@ export class PRAnalysisController{
                 }
             }
 
+            const useLive = process.env.USE_LIVE_LLM === 'true';
+            const coachAdapter = useLive ? watsonxAgentACoachAdapter : agentACoachAdapter;
+            const radarAdapter  = useLive ? watsonxAgentBRadarAdapter  : agentBRadarAdapter;
+
             const [coachResult,radarResult]=await Promise.all([
-                agentACoachAdapter.execute({prId,diff}),
-                agentBRadarAdapter.execute({prId,diff})
+                coachAdapter.execute({prId,diff}),
+                radarAdapter.execute({prId,diff})
             ]);
 
             const executionTimeMs = Date.now()-startTime;
-            const bobcoinsBilled = 1.25;
+
+            // Derive cost from actual token usage reported by each agent.
+            const totalPromptTokens     = coachResult.tokenUsage.promptTokens     + radarResult.tokenUsage.promptTokens;
+            const totalCompletionTokens = coachResult.tokenUsage.completionTokens + radarResult.tokenUsage.completionTokens;
+            const bobcoinsBilled        = BOBCOIN_ECONOMY.calculateCost(totalPromptTokens, totalCompletionTokens);
 
             const responsePayload:PRAnalysisResponse={
                 prId:prId||'custom-pr',
-                source:'mock_adapter',
+                source: useLive ? 'watsonx_live' : 'mock_adapter',
                 executionTimeMs,
                 bobcoinsBilled,
                 cacheKey,

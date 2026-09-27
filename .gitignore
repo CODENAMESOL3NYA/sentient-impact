@@ -6,3 +6,4 @@ coverage/
 *.log
 .env*
 !.env.example
+.bob/artifacts/sentient-impact-integration-architecture-report.html
