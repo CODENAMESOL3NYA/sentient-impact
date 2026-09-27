@@ -1,4 +1,4 @@
-import { MOCK_PRS } from "@/src/data/mockPrData";
+import { MOCK_PRS } from '../../src/data/mockPrData';
 import { AGENT_A_PROMPT, AGENT_B_PROMPT } from '../../src/data/bobPrompts';
 import { getLLMClient } from '../services/llmClientFactory';
 import type {

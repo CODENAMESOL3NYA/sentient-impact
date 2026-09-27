@@ -1,27 +1,18 @@
-import type { Request, Response, NextFunction, RequestHandler } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 
-interface RateLimitEntry {
-    count: number;
-    windowStart: number;
+export interface RateLimiterOptions {
+  windowMs: number;
+  maxRequests: number;
+  message?: string;
 }
 
-interface RateLimiterOptions {
-    /** Length of the sliding window in milliseconds. Default: 60 000 (1 min). */
-    windowMs?: number;
-    /** Maximum number of requests allowed per IP per window. Default: 30. */
-    maxRequests?: number;
-    /** Human-readable message returned in the 429 response body. */
-    message?: string;
+interface ClientRateRecord {
+  count: number;
+  resetAt: number;
 }
 
 /**
- * Minimal in-process fixed-window rate limiter keyed by client IP.
- * No external dependencies required.
- *
- * Each IP is allowed `maxRequests` within a rolling `windowMs` period.
- * Once the window expires the counter resets automatically on the next request.
- * Stale entries (IPs that have not been seen for > windowMs) are swept
- * every `windowMs` to prevent unbounded Map growth.
+ * Lightweight in-memory rate limiter middleware for Express routes.
  */
 export function createRateLimiter(options: RateLimiterOptions = {}): RequestHandler {
     const windowMs   = options.windowMs   ?? 60_000;

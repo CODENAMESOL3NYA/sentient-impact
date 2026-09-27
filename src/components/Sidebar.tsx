@@ -1,9 +1,8 @@
-import { useState } from 'react';
-import { Loader2, Search, GitPullRequest, GitBranch, ChevronRight } from 'lucide-react';
+import { useState, useEffect } from 'react';
 import type { GitHubPRSummary } from '../../server/services/githubClient';
-import type { LLMProvider } from '../App';
+import { MOCK_PRS } from '../data/mockPrData';
 
-interface Props {
+interface SidebarProps {
   selectedPR: GitHubPRSummary | null;
   isAnalyzing: boolean;
   onSelectPR: (pr: GitHubPRSummary, owner: string, repo: string) => void;
@@ -12,250 +11,241 @@ interface Props {
   onProviderChange: (p: LLMProvider) => void;
 }
 
-export default function Sidebar({ selectedPR, isAnalyzing, onSelectPR, onAnalyze, provider, onProviderChange }: Props) {
-  const [owner, setOwner] = useState('');
-  const [repo, setRepo] = useState('');
-  const [prs, setPrs] = useState<GitHubPRSummary[]>([]);
-  const [fetchLoading, setFetchLoading] = useState(false);
-  const [fetchError, setFetchError] = useState<string | null>(null);
-  const [lastFetched, setLastFetched] = useState<{ owner: string; repo: string } | null>(null);
+const DEFAULT_PRS: GitHubPRSummary[] = MOCK_PRS.map(pr => ({
+  number: pr.number,
+  title: pr.title,
+  author: pr.author,
+  sourceBranch: pr.sourceBranch,
+  targetBranch: pr.targetBranch,
+  additions: pr.additions,
+  deletions: pr.deletions,
+  changedFilesCount: pr.changedFilesCount,
+}));
 
-  async function handleFetch() {
+export default function Sidebar({
+  selectedPR,
+  isAnalyzing,
+  onSelectPR,
+  onAnalyze,
+}: SidebarProps) {
+  const [owner, setOwner] = useState('21Tech');
+  const [repo, setRepo] = useState('sentinel-impact');
+  const [prs, setPrs] = useState<GitHubPRSummary[]>(DEFAULT_PRS);
+  const [loadingList, setLoadingList] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!selectedPR && DEFAULT_PRS.length > 0) {
+      onSelectPR(DEFAULT_PRS[0], '21Tech', 'sentinel-impact');
+    }
+  }, []);
+
+  async function handleFetchPRs(e?: React.FormEvent) {
+    if (e) e.preventDefault();
     if (!owner.trim() || !repo.trim()) return;
-    setFetchLoading(true);
-    setFetchError(null);
-    setPrs([]);
 
+    setLoadingList(true);
+    setListError(null);
     try {
       const res = await fetch(
         `/api/github/prs?owner=${encodeURIComponent(owner.trim())}&repo=${encodeURIComponent(repo.trim())}`
       );
       const data = await res.json();
-      if (!res.ok) throw new Error(data.message ?? `Error ${res.status}`);
-      setPrs(data.pullRequests ?? []);
-      setLastFetched({ owner: owner.trim(), repo: repo.trim() });
+      if (!res.ok) {
+        throw new Error(data.message || `Failed to load PRs (${res.status})`);
+      }
+      const fetched: GitHubPRSummary[] = Array.isArray(data.prs) ? data.prs : DEFAULT_PRS;
+      setPrs(fetched);
+      if (fetched.length > 0) {
+        onSelectPR(fetched[0], owner.trim(), repo.trim());
+      }
     } catch (err) {
-      setFetchError(err instanceof Error ? err.message : 'Failed to fetch PRs.');
+      setListError(err instanceof Error ? err.message : 'Could not fetch PR list');
     } finally {
-      setFetchLoading(false);
+      setLoadingList(false);
     }
   }
 
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Enter') handleFetch();
-  }
-
-  const canAnalyze = selectedPR !== null && !isAnalyzing;
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#0d1117' }}>
-
-      {/* ── Provider toggle ── */}
-      <div style={{ padding: '10px 16px', borderBottom: '1px solid #21262d', flexShrink: 0 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: '#8b949e', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 8 }}>
-          AI Provider
+      {/* Repository selector */}
+      <form
+        onSubmit={handleFetchPRs}
+        style={{
+          padding: 14,
+          borderBottom: '1px solid #21262d',
+          backgroundColor: '#161b22',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+        }}
+      >
+        <div style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+          GitHub Repository
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
-          {(['watsonx', 'gemini'] as LLMProvider[]).map(p => (
-            <button
-              key={p}
-              onClick={() => onProviderChange(p)}
-              style={{
-                flex: 1,
-                padding: '5px 0',
-                borderRadius: 6,
-                border: `1px solid ${provider === p ? '#58a6ff' : '#30363d'}`,
-                backgroundColor: provider === p ? '#1f3a5f' : '#21262d',
-                color: provider === p ? '#58a6ff' : '#8b949e',
-                fontSize: 12,
-                fontWeight: provider === p ? 600 : 400,
-                cursor: 'pointer',
-                transition: 'all 0.1s',
-                textTransform: 'capitalize',
-              }}
-            >
-              {p === 'watsonx' ? 'watsonx' : 'Gemini'}
-            </button>
-          ))}
+          <input
+            type="text"
+            value={owner}
+            onChange={e => setOwner(e.target.value)}
+            placeholder="owner"
+            style={{
+              flex: 1,
+              minWidth: 0,
+              backgroundColor: '#0d1117',
+              border: '1px solid #30363d',
+              borderRadius: 6,
+              padding: '5px 8px',
+              color: '#e6edf3',
+              fontSize: 12,
+            }}
+          />
+          <span style={{ color: '#8b949e', alignSelf: 'center' }}>/</span>
+          <input
+            type="text"
+            value={repo}
+            onChange={e => setRepo(e.target.value)}
+            placeholder="repo"
+            style={{
+              flex: 1.3,
+              minWidth: 0,
+              backgroundColor: '#0d1117',
+              border: '1px solid #30363d',
+              borderRadius: 6,
+              padding: '5px 8px',
+              color: '#e6edf3',
+              fontSize: 12,
+            }}
+          />
         </div>
-      </div>
-
-      {/* ── Header ── */}
-      <div style={{ padding: '14px 16px 12px', borderBottom: '1px solid #21262d', flexShrink: 0 }}>
-        <div style={{ fontSize: 12, fontWeight: 600, color: '#8b949e', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 10 }}>
-          Repository
-        </div>
-
-        {/* Owner input */}
-        <input
-          value={owner}
-          onChange={e => setOwner(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="owner"
-          style={inputStyle}
-        />
-
-        {/* Repo input */}
-        <input
-          value={repo}
-          onChange={e => setRepo(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="repository"
-          style={{ ...inputStyle, marginTop: 6 }}
-        />
-
-        {/* Fetch button */}
         <button
-          onClick={handleFetch}
-          disabled={fetchLoading || !owner.trim() || !repo.trim()}
+          type="submit"
+          disabled={loadingList}
           style={{
-            ...buttonStyle,
-            marginTop: 8,
-            opacity: fetchLoading || !owner.trim() || !repo.trim() ? 0.5 : 1,
-            cursor: fetchLoading || !owner.trim() || !repo.trim() ? 'not-allowed' : 'pointer',
+            backgroundColor: '#21262d',
+            border: '1px solid #30363d',
+            borderRadius: 6,
+            padding: '5px 10px',
+            color: '#c9d1d9',
+            fontSize: 12,
+            fontWeight: 500,
+            cursor: loadingList ? 'not-allowed' : 'pointer',
           }}
         >
-          {fetchLoading
-            ? <><Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> Fetching…</>
-            : <><Search size={13} /> Fetch PRs</>}
+          {loadingList ? 'Loading PRs…' : 'Load Open PRs'}
         </button>
-
-        {/* Repo label after fetch */}
-        {lastFetched && !fetchLoading && (
-          <div style={{ marginTop: 8, fontSize: 11, color: '#58a6ff', display: 'flex', alignItems: 'center', gap: 4 }}>
-            <GitBranch size={11} />
-            {lastFetched.owner}/{lastFetched.repo}
-            <span style={{ color: '#8b949e' }}>· {prs.length} open PR{prs.length !== 1 ? 's' : ''}</span>
-          </div>
+        {listError && (
+          <div style={{ fontSize: 11, color: '#f85149' }}>{listError}</div>
         )}
+      </form>
 
-        {/* Error */}
-        {fetchError && (
-          <div style={{ marginTop: 8, fontSize: 12, color: '#f85149', lineHeight: 1.4 }}>
-            ⚠ {fetchError}
-          </div>
-        )}
+      {/* Pull Request List Header */}
+      <div
+        style={{
+          padding: '10px 14px',
+          borderBottom: '1px solid #21262d',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}
+      >
+        <span style={{ fontSize: 12, fontWeight: 600, color: '#8b949e' }}>
+          Pull Requests ({prs.length})
+        </span>
+        <span style={{ fontSize: 11, color: '#58a6ff' }}>
+          {owner}/{repo}
+        </span>
       </div>
 
-      {/* ── PR list ── */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
-        {prs.length === 0 && !fetchLoading && (
-          <div style={{ padding: '32px 16px', textAlign: 'center', color: '#484f58', fontSize: 13 }}>
-            {lastFetched
-              ? 'No open pull requests found.'
-              : 'Enter a repo above to load pull requests.'}
-          </div>
-        )}
-
+      {/* PR Items */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
         {prs.map(pr => {
           const isSelected = selectedPR?.number === pr.number;
           return (
-            <button
+            <div
               key={pr.number}
-              onClick={() => onSelectPR(pr, lastFetched!.owner, lastFetched!.repo)}
+              onClick={() => onSelectPR(pr, owner.trim(), repo.trim())}
               style={{
-                display: 'block',
-                width: '100%',
-                textAlign: 'left',
-                background: isSelected ? '#161b22' : 'transparent',
-                border: 'none',
-                borderLeft: isSelected ? '2px solid #58a6ff' : '2px solid transparent',
-                padding: '10px 14px 10px 12px',
+                padding: 12,
+                borderRadius: 8,
+                border: isSelected ? '1px solid #58a6ff' : '1px solid #21262d',
+                backgroundColor: isSelected ? '#161b22' : '#0d1117',
                 cursor: 'pointer',
-                transition: 'background 0.1s',
+                transition: 'border-color 0.15s ease',
               }}
-              onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLButtonElement).style.background = '#161b2280'; }}
-              onMouseLeave={e => { if (!isSelected) (e.currentTarget as HTMLButtonElement).style.background = 'transparent'; }}
             >
-              {/* PR number + title */}
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-                <GitPullRequest size={13} style={{ color: '#3fb950', flexShrink: 0, marginTop: 2 }} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, color: isSelected ? '#e6edf3' : '#c9d1d9', fontWeight: isSelected ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {pr.title}
-                  </div>
-                  <div style={{ fontSize: 11, color: '#8b949e', marginTop: 2 }}>
-                    #{pr.number} · {pr.author}
-                  </div>
-                </div>
-                {isSelected && <ChevronRight size={12} style={{ color: '#58a6ff', flexShrink: 0, marginTop: 2 }} />}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#58a6ff' }}>
+                  #{pr.number}
+                </span>
+                {pr.additions !== undefined && pr.deletions !== undefined && (
+                  <span style={{ fontSize: 11, fontFamily: 'monospace' }}>
+                    <span style={{ color: '#3fb950', marginRight: 6 }}>+{pr.additions}</span>
+                    <span style={{ color: '#f85149' }}>-{pr.deletions}</span>
+                  </span>
+                )}
               </div>
 
-              {/* Branch */}
-              <div style={{ fontSize: 11, color: '#484f58', marginTop: 4, marginLeft: 19, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#e6edf3', lineHeight: 1.35, marginBottom: 6 }}>
+                {pr.title}
+              </div>
+
+              <div style={{ fontSize: 11, color: '#8b949e', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>by {pr.author}</span>
+              </div>
+
+              <div
+                style={{
+                  marginTop: 6,
+                  fontSize: 11,
+                  color: '#8b949e',
+                  fontFamily: 'monospace',
+                  backgroundColor: '#0d1117',
+                  padding: '2px 6px',
+                  borderRadius: 4,
+                  border: '1px solid #21262d',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
                 {pr.sourceBranch} → {pr.targetBranch}
               </div>
-
-              {/* Stats */}
-              <div style={{ display: 'flex', gap: 8, marginTop: 4, marginLeft: 19 }}>
-                <span style={{ fontSize: 11, color: '#3fb950' }}>+{pr.additions}</span>
-                <span style={{ fontSize: 11, color: '#f85149' }}>-{pr.deletions}</span>
-                <span style={{ fontSize: 11, color: '#8b949e' }}>{pr.changedFiles} file{pr.changedFiles !== 1 ? 's' : ''}</span>
-              </div>
-            </button>
+            </div>
           );
         })}
       </div>
 
-      {/* ── Analyse button ── */}
-      <div style={{ padding: '12px 16px', borderTop: '1px solid #21262d', flexShrink: 0 }}>
+      {/* Bottom Action Footer */}
+      <div
+        style={{
+          padding: 14,
+          borderTop: '1px solid #21262d',
+          backgroundColor: '#161b22',
+        }}
+      >
         <button
+          disabled={!selectedPR || isAnalyzing}
           onClick={() => selectedPR && onAnalyze(selectedPR)}
-          disabled={!canAnalyze}
           style={{
-            ...buttonStyle,
-            backgroundColor: canAnalyze ? '#238636' : '#21262d',
-            borderColor: canAnalyze ? '#2ea043' : '#30363d',
-            opacity: canAnalyze ? 1 : 0.6,
-            cursor: canAnalyze ? 'pointer' : 'not-allowed',
+            width: '100%',
+            padding: '9px 14px',
+            borderRadius: 6,
+            border: '1px solid rgba(240, 246, 252, 0.1)',
+            backgroundColor: !selectedPR || isAnalyzing ? '#21262d' : '#238636',
+            color: !selectedPR || isAnalyzing ? '#8b949e' : '#ffffff',
             fontWeight: 600,
             fontSize: 13,
+            cursor: !selectedPR || isAnalyzing ? 'not-allowed' : 'pointer',
           }}
         >
           {isAnalyzing
-            ? <><Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> Analysing…</>
-            : '⚡ Analyse PR'}
+            ? 'Running Agent A & B…'
+            : selectedPR
+            ? `Analyze PR #${selectedPR.number}`
+            : 'Select a PR to Analyze'}
         </button>
-
-        {selectedPR && (
-          <div style={{ marginTop: 6, fontSize: 11, color: '#8b949e', textAlign: 'center' }}>
-            PR #{selectedPR.number} selected
-          </div>
-        )}
       </div>
-
-      {/* Keyframe for spinner */}
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Shared micro-styles
-// ---------------------------------------------------------------------------
-
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  backgroundColor: '#0d1117',
-  border: '1px solid #30363d',
-  borderRadius: 6,
-  color: '#e6edf3',
-  fontSize: 13,
-  padding: '6px 10px',
-  outline: 'none',
-};
-
-const buttonStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 6,
-  width: '100%',
-  padding: '7px 12px',
-  borderRadius: 6,
-  border: '1px solid #30363d',
-  backgroundColor: '#21262d',
-  color: '#e6edf3',
-  fontSize: 12,
-  cursor: 'pointer',
-};
