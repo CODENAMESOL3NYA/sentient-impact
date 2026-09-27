@@ -1,5 +1,6 @@
 import { MOCK_PRS } from "@/src/data/mockPrData";
 import { AGENT_A_PROMPT, AGENT_B_PROMPT } from '../../src/data/bobPrompts';
+import { getWatsonxClient } from '../services/watsonxClient';
 import type {
     CoachFinding,
     DependencyNode,
@@ -125,3 +126,125 @@ export class AgentBRadarAdapter implements IAgentAdapter<{prId?:string;diff:stri
 
 export const agentACoachAdapter = new AgentACoachAdapter();
 export const agentBRadarAdapter = new AgentBRadarAdapter();
+
+// ---------------------------------------------------------------------------
+// Live adapters — powered by watsonx.ai foundation models
+// ---------------------------------------------------------------------------
+
+/**
+ * Strips markdown code fences that some models add despite the system prompt
+ * instructing them not to. Handles ```json ... ``` and bare ``` ... ``` wrapping.
+ */
+function stripCodeFences(raw: string): string {
+    return raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
+}
+
+/**
+ * Live Adapter A: The Code Review Coach (watsonx)
+ * Sends the real diff to a foundation model and parses the JSON response
+ * into CoachFinding[] with real token usage.
+ */
+export class WatsonxAgentACoachAdapter
+    implements IAgentAdapter<{ prId?: string; diff: string }, { findings: CoachFinding[]; tokenUsage: TokenUsage }>
+{
+    async execute(input: { prId?: string; diff: string }): Promise<{ findings: CoachFinding[]; tokenUsage: TokenUsage }> {
+        const client = getWatsonxClient();
+
+        const userContent = AGENT_A_PROMPT.inputTemplate
+            .replace('<PR_TITLE>', input.prId ?? 'Custom PR')
+            .replace('<UNIFIED_GIT_DIFF>', input.diff);
+
+        // Append the output schema to the system prompt so the model knows exactly
+        // what JSON shape to produce.
+        const systemPrompt =
+            `${AGENT_A_PROMPT.systemPrompt}\n\nOUTPUT SCHEMA (return ONLY this JSON, no markdown fences):\n${AGENT_A_PROMPT.outputJsonSchema}`;
+
+        const { text, promptTokens, completionTokens } = await client.chat(systemPrompt, userContent);
+
+        let parsed: { findings: CoachFinding[] };
+        try {
+            parsed = JSON.parse(stripCodeFences(text));
+        } catch {
+            throw new Error(`[WatsonxAgentA] Failed to parse model response as JSON.\nRaw output:\n${text}`);
+        }
+
+        // Ensure every finding has a unique id (model may omit it).
+        const findings: CoachFinding[] = (parsed.findings ?? []).map((f, i) => ({
+            ...f,
+            id: f.id ?? `wx-a-finding-${i}`,
+        }));
+
+        return {
+            findings,
+            tokenUsage: { promptTokens, completionTokens },
+        };
+    }
+}
+
+/**
+ * Live Adapter B: The Blast-Radius Radar (watsonx)
+ * Sends the real diff to a foundation model and parses the JSON response
+ * into blast-radius graph, risk score, and release notes with real token usage.
+ */
+export class WatsonxAgentBRadarAdapter
+    implements IAgentAdapter<
+        { prId?: string; diff: string },
+        { blastRadius: BlastRadiusGraphPayload; riskScore: RiskScoreBreakdown; releaseNotes: ReleaseNotes; tokenUsage: TokenUsage }
+    >
+{
+    async execute(input: { prId?: string; diff: string }): Promise<{
+        blastRadius: BlastRadiusGraphPayload;
+        riskScore: RiskScoreBreakdown;
+        releaseNotes: ReleaseNotes;
+        tokenUsage: TokenUsage;
+    }> {
+        const client = getWatsonxClient();
+
+        const userContent = AGENT_B_PROMPT.inputTemplate
+            .replace('"src/middleware/authMiddleware.ts", "src/types/auth.ts"', `"${input.prId ?? 'custom'}"`)
+            .replace('<UNIFIED_GIT_DIFF>', input.diff)
+            .replace('<SUMMARY_OF_IMPORTS>', 'See diff above.');
+
+        const systemPrompt =
+            `${AGENT_B_PROMPT.systemPrompt}\n\nOUTPUT SCHEMA (return ONLY this JSON, no markdown fences):\n${AGENT_B_PROMPT.outputJsonSchema}`;
+
+        const { text, promptTokens, completionTokens } = await client.chat(systemPrompt, userContent);
+
+        let parsed: {
+            riskScore: RiskScoreBreakdown;
+            dependencyGraph: { nodes: DependencyNode[]; edges: DependencyEdge[] };
+            blastRadiusTable: BlastRadiusImpact[];
+            releaseNotes?: ReleaseNotes;
+        };
+        try {
+            parsed = JSON.parse(stripCodeFences(text));
+        } catch {
+            throw new Error(`[WatsonxAgentB] Failed to parse model response as JSON.\nRaw output:\n${text}`);
+        }
+
+        // Provide a safe fallback for releaseNotes in case the model omits it.
+        const releaseNotes: ReleaseNotes = parsed.releaseNotes ?? {
+            title: 'Release Notes',
+            versionTarget: 'TBD',
+            executiveSummary: parsed.riskScore?.summary ?? '',
+            breakingChanges: [],
+            downstreamServicesToAlert: [],
+            qaChecklist: [],
+            rollbackPlan: [],
+        };
+
+        return {
+            blastRadius: {
+                nodes: parsed.dependencyGraph?.nodes ?? [],
+                edges: parsed.dependencyGraph?.edges ?? [],
+                table: parsed.blastRadiusTable ?? [],
+            },
+            riskScore: parsed.riskScore,
+            releaseNotes,
+            tokenUsage: { promptTokens, completionTokens },
+        };
+    }
+}
+
+export const watsonxAgentACoachAdapter = new WatsonxAgentACoachAdapter();
+export const watsonxAgentBRadarAdapter = new WatsonxAgentBRadarAdapter();
