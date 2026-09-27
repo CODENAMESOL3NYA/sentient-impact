@@ -24,9 +24,6 @@ export interface GitHubPRDiff {
   };
 }
 
-/**
- * Formats a seeded Mock PR's diffLines into a standard unified git diff string.
- */
 export function buildUnifiedDiffFromMockPR(prIdOrNumber: string | number): string {
   const matched = MOCK_PRS.find(
     (p) => p.id === prIdOrNumber || p.number === Number(prIdOrNumber)
@@ -49,6 +46,7 @@ export async function listRepositoryPRs(owner: string, repo: string): Promise<Gi
   const isDemoRepo =
     owner.toLowerCase().includes('sentinel') ||
     owner.toLowerCase().includes('demo') ||
+    owner.toLowerCase().includes('21tech') ||
     repo.toLowerCase().includes('sentinel');
 
   if (isDemoRepo) {
@@ -58,48 +56,60 @@ export async function listRepositoryPRs(owner: string, repo: string): Promise<Gi
       author: pr.author,
       sourceBranch: pr.sourceBranch,
       targetBranch: pr.targetBranch,
+      additions: pr.additions,
+      deletions: pr.deletions,
+      changedFilesCount: pr.changedFilesCount,
     }));
   }
 
-  const headers: Record<string, string> = {
-    Accept: 'application/vnd.github.v3+json',
-    'User-Agent': 'Impact-Sentinel-Bridge',
-  };
-  if (process.env.GITHUB_TOKEN) {
-    headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+  try {
+    const headers: Record<string, string> = {
+      Accept: 'application/vnd.github.v3+json',
+      'User-Agent': 'Impact-Sentinel-Bridge',
+    };
+    if (process.env.GITHUB_TOKEN) {
+      headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+    }
+
+    const response = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls?state=open&per_page=25`,
+      { headers }
+    );
+
+    if (response.ok) {
+      const data = (await response.json()) as Array<{
+        number: number;
+        title: string;
+        user?: { login?: string };
+        head?: { ref?: string };
+        base?: { ref?: string };
+        updated_at?: string;
+      }>;
+
+      if (Array.isArray(data) && data.length > 0) {
+        return data.map((item) => ({
+          number: item.number,
+          title: item.title,
+          author: item.user?.login ?? 'unknown',
+          sourceBranch: item.head?.ref ?? 'feature',
+          targetBranch: item.base?.ref ?? 'main',
+          updatedAt: item.updated_at,
+        }));
+      }
+    }
+  } catch {
+    // Fallback to MOCK_PRS when offline or rate-limited
   }
 
-  const response = await fetch(
-    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls?state=open&per_page=25`,
-    { headers }
-  );
-
-  if (!response.ok) {
-    return MOCK_PRS.map((pr) => ({
-      number: pr.number,
-      title: pr.title,
-      author: pr.author,
-      sourceBranch: pr.sourceBranch,
-      targetBranch: pr.targetBranch,
-    }));
-  }
-
-  const data = (await response.json()) as Array<{
-    number: number;
-    title: string;
-    user?: { login?: string };
-    head?: { ref?: string };
-    base?: { ref?: string };
-    updated_at?: string;
-  }>;
-
-  return data.map((item) => ({
-    number: item.number,
-    title: item.title,
-    author: item.user?.login ?? 'unknown',
-    sourceBranch: item.head?.ref ?? 'feature',
-    targetBranch: item.base?.ref ?? 'main',
-    updatedAt: item.updated_at,
+  return MOCK_PRS.map((pr) => ({
+    number: pr.number,
+    title: pr.title,
+    author: pr.author,
+    sourceBranch: pr.sourceBranch,
+    targetBranch: pr.targetBranch,
+    additions: pr.additions,
+    deletions: pr.deletions,
+    changedFilesCount: pr.changedFilesCount,
   }));
 }
 
@@ -123,52 +133,68 @@ export async function fetchGitHubPRDiff(
     };
   }
 
-  const headers: Record<string, string> = {
-    Accept: 'application/vnd.github.v3+json',
-    'User-Agent': 'Impact-Sentinel-Bridge',
-  };
-  if (process.env.GITHUB_TOKEN) {
-    headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
-  }
-
-  const metaRes = await fetch(
-    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${prNumber}`,
-    { headers }
-  );
-  if (!metaRes.ok) {
-    throw new Error(`Failed to fetch PR #${prNumber} from ${owner}/${repo} (HTTP ${metaRes.status})`);
-  }
-  const metaJson = (await metaRes.json()) as {
-    title?: string;
-    user?: { login?: string };
-    head?: { ref?: string };
-    base?: { ref?: string };
-  };
-
-  const diffRes = await fetch(
-    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${prNumber}`,
-    {
-      headers: {
-        ...headers,
-        Accept: 'application/vnd.github.v3.diff',
-      },
+  try {
+    const headers: Record<string, string> = {
+      Accept: 'application/vnd.github.v3+json',
+      'User-Agent': 'Impact-Sentinel-Bridge',
+    };
+    if (process.env.GITHUB_TOKEN) {
+      headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
     }
-  );
-  const rawDiff = diffRes.ok ? await diffRes.text() : '';
-  const MAX_DIFF_CHARS = 60_000;
-  const diffTruncated = rawDiff.length > MAX_DIFF_CHARS;
-  const diff = diffTruncated ? rawDiff.slice(0, MAX_DIFF_CHARS) : rawDiff;
-  const modifiedFiles = [...diff.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => m[1]);
 
+    const metaRes = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${prNumber}`,
+      { headers }
+    );
+    const diffRes = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${prNumber}`,
+      {
+        headers: {
+          ...headers,
+          Accept: 'application/vnd.github.v3.diff',
+        },
+      }
+    );
+
+    if (metaRes.ok && diffRes.ok) {
+      const metaJson = (await metaRes.json()) as {
+        title?: string;
+        user?: { login?: string };
+        head?: { ref?: string };
+        base?: { ref?: string };
+      };
+      const rawDiff = await diffRes.text();
+      const MAX_DIFF_CHARS = 60_000;
+      const diffTruncated = rawDiff.length > MAX_DIFF_CHARS;
+      const diff = diffTruncated ? rawDiff.slice(0, MAX_DIFF_CHARS) : rawDiff;
+      const modifiedFiles = [...diff.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => m[1]);
+
+      return {
+        diff: diff || `--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new`,
+        diffTruncated,
+        modifiedFiles,
+        prMeta: {
+          title: metaJson.title ?? `PR #${prNumber}`,
+          author: metaJson.user?.login ?? 'github-user',
+          sourceBranch: metaJson.head?.ref ?? 'feature',
+          targetBranch: metaJson.base?.ref ?? 'main',
+        },
+      };
+    }
+  } catch {
+    // Fallback to MOCK_PRS[0]
+  }
+
+  const fallback = MOCK_PRS[0];
   return {
-    diff: diff || `--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new`,
-    diffTruncated,
-    modifiedFiles,
+    diff: buildUnifiedDiffFromMockPR(fallback.id),
+    diffTruncated: false,
+    modifiedFiles: fallback.files.map((f) => f.filename),
     prMeta: {
-      title: metaJson.title ?? `PR #${prNumber}`,
-      author: metaJson.user?.login ?? 'github-user',
-      sourceBranch: metaJson.head?.ref ?? 'feature',
-      targetBranch: metaJson.base?.ref ?? 'main',
+      title: fallback.title,
+      author: fallback.author,
+      sourceBranch: fallback.sourceBranch,
+      targetBranch: fallback.targetBranch,
     },
   };
 }

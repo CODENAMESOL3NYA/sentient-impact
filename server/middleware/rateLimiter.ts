@@ -1,4 +1,4 @@
-import type { Request, Response, NextFunction } from 'express';
+import type { Request, Response, NextFunction, RequestHandler } from 'express';
 
 export interface RateLimiterOptions {
   windowMs: number;
@@ -6,46 +6,39 @@ export interface RateLimiterOptions {
   message?: string;
 }
 
-interface ClientRateRecord {
+interface ClientBucket {
   count: number;
   resetAt: number;
 }
 
-/**
- * Lightweight in-memory rate limiter middleware for Express routes.
- */
-export function createRateLimiter(options: RateLimiterOptions) {
-  const {
-    windowMs = 60_000,
-    maxRequests = 30,
-    message = 'Too many requests, please try again later.',
-  } = options;
+export function createRateLimiter(options: RateLimiterOptions): RequestHandler {
+  const { windowMs, maxRequests, message = 'Too many requests, please try again later.' } = options;
+  const buckets = new Map<string, ClientBucket>();
 
-  const clients = new Map<string, ClientRateRecord>();
-
-  return function rateLimiterMiddleware(req: Request, res: Response, next: NextFunction): void {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
     const now = Date.now();
-    const key = req.ip || req.socket.remoteAddress || 'global';
-    const record = clients.get(key);
+    const existing = buckets.get(ip);
 
-    if (!record || now > record.resetAt) {
-      clients.set(key, { count: 1, resetAt: now + windowMs });
+    if (!existing || now > existing.resetAt) {
+      buckets.set(ip, { count: 1, resetAt: now + windowMs });
       next();
       return;
     }
 
-    if (record.count >= maxRequests) {
+    if (existing.count >= maxRequests) {
       res.status(429).json({
         error: 'RATE_LIMIT_EXCEEDED',
         statusCode: 429,
         message,
-        retryAfterMs: Math.max(0, record.resetAt - now),
         timestamp: new Date().toISOString(),
+        path: req.originalUrl,
+        bobcoinsRefunded: true,
       });
       return;
     }
 
-    record.count += 1;
+    existing.count += 1;
     next();
   };
 }

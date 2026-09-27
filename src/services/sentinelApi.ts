@@ -1,25 +1,11 @@
 import type {
   CoachFinding,
-  DependencyNode,
-  DependencyEdge,
-  BlastRadiusImpact,
   RiskScoreBreakdown,
   ReleaseNotes,
   PullRequest,
   StandardCategory,
 } from '../types/sentinal';
-
-export interface BlastRadiusGraphPayload {
-  nodes: DependencyNode[];
-  edges: DependencyEdge[];
-  table: BlastRadiusImpact[];
-}
-
-export interface AnalyzePRRequestPayload {
-  prId?: string;
-  diff: string;
-  bypassCache?: boolean;
-}
+import type { BlastRadiusGraphPayload } from '../../server/adapters/agentAdapters';
 
 export interface AnalyzePRClientResponse {
   prId: string;
@@ -50,59 +36,61 @@ export interface CacheStatsPayload {
 export interface PolicyRule {
   id: string;
   code: string;
-  name: string;
+  title: string;
   description: string;
-  enabled: boolean;
   enforcedCategories: StandardCategory[];
-  isGovernanceRule?: boolean;
+  enabled: boolean;
+  requiresMinApprovals?: number;
 }
 
 export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'rule-gov-approvals',
     code: 'GOV-01',
-    name: 'Mandatory 2+ Reviewer Approvals',
-    description: 'Require at least two senior/peer sign-offs before merging into main or staging.',
-    enabled: true,
+    title: 'Mandatory 2+ Reviewer Approvals',
+    description: 'Requires at least 2 peer reviewer sign-offs before staging merge.',
     enforcedCategories: [],
-    isGovernanceRule: true,
+    enabled: true,
+    requiresMinApprovals: 2,
   },
   {
-    id: 'rule-sec-owasp',
+    id: 'rule-owasp-sec01',
     code: 'OWASP SEC-01',
-    name: 'Input & Token Sanitization (OWASP Top 10)',
-    description: 'Enforce cryptographic JWT verification, SQL parameterization, and ACID financial locks.',
-    enabled: true,
+    title: 'Input Sanitization & Verified Crypto',
+    description: 'Enforces JWT signature verification, SQL parameterization, and ACID locks.',
     enforcedCategories: ['security'],
+    enabled: true,
   },
   {
     id: 'rule-ts-strict',
     code: 'TS-STRICT-02',
-    name: 'Strict TypeScript No-Implicit-Any & Contract Stability',
-    description: 'Block unverified type assertions and breaking context interface mutations.',
-    enabled: true,
+    title: 'Strict TypeScript & API Contract Safety',
+    description: 'Blocks breaking context interface mutations and unverified type assertions.',
     enforcedCategories: ['type_safety', 'architectural'],
+    enabled: true,
   },
   {
     id: 'rule-solid-dry',
     code: 'SOLID-03',
-    name: 'SOLID / DRY & Async Error Boundary Compliance',
-    description: 'Require explicit promise rejection handling and single-responsibility DTO separation.',
+    title: 'SOLID / DRY & Async Error Boundaries',
+    description: 'Requires explicit promise rejection handling and separation of concerns.',
+    enforcedCategories: ['solid_dry', 'test_coverage'],
     enabled: true,
-    enforcedCategories: ['solid_dry'],
   },
   {
-    id: 'rule-perf-guard',
+    id: 'rule-perf-lru',
     code: 'PERF-04',
-    name: 'Bounded Memory & Query Performance Guardrails',
-    description: 'Prevent unbounded in-memory Map leaks, N+1 queries, and unindexed loops.',
+    title: 'Bounded Memory & Replica Routing',
+    description: 'Prevents unbounded in-memory caches and connection pool starvation.',
+    enforcedCategories: ['performance'],
     enabled: true,
-    enforcedCategories: ['performance', 'test_coverage'],
   },
 ];
 
 /**
- * Builds a deterministic unified git diff string from a PullRequest and any applied 1-click patches.
+ * Synthesizes a valid unified git diff string from a PullRequest object's diffLines,
+ * incorporating any 1-Click patches applied by the developer so the backend SHA-256
+ * cache key accurately reflects the current state of the code.
  */
 export function buildUnifiedDiffFromPR(
   pr: PullRequest,
@@ -110,46 +98,55 @@ export function buildUnifiedDiffFromPR(
 ): string {
   return pr.files
     .map((file) => {
+      if (
+        file.rawDiff &&
+        file.rawDiff.trim().length > 0 &&
+        Object.keys(appliedPatches).length === 0
+      ) {
+        return file.rawDiff;
+      }
       const header = `diff --git a/${file.filename} b/${file.filename}\n--- a/${file.filename}\n+++ b/${file.filename}`;
-      const lines = file.diffLines
-        .map((dl) => {
-          if (dl.findingId && appliedPatches[dl.findingId]) {
-            const patchLines = appliedPatches[dl.findingId]
-              .split('\n')
-              .map((line) => `+ ${line}`)
-              .join('\n');
-            return patchLines;
+      const body = file.diffLines
+        .map((line) => {
+          if (line.findingId && appliedPatches[line.findingId]) {
+            return `+ ${appliedPatches[line.findingId].split('\n')[0]}`;
           }
-          return dl.content;
+          return line.content;
         })
         .join('\n');
-      return `${header}\n${lines}`;
+      return `${header}\n${body}`;
     })
     .join('\n\n');
 }
 
 /**
- * Dispatches a git diff payload to POST /api/analyze-pr
+ * Calls POST /api/analyze-pr on the existing Express backend.
  */
-export async function analyzePullRequestDiff(
-  payload: AnalyzePRRequestPayload
-): Promise<AnalyzePRClientResponse> {
+export async function analyzePullRequestDiff(params: {
+  prId?: string;
+  diff: string;
+  bypassCache?: boolean;
+}): Promise<AnalyzePRClientResponse> {
   const response = await fetch('/api/analyze-pr', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      prId: params.prId,
+      diff: params.diff,
+      bypassCache: params.bypassCache ?? false,
+    }),
   });
 
   const data = await response.json();
   if (!response.ok) {
-    throw new Error(data.message || `Analysis failed with status ${response.status}`);
+    throw new Error(data.message || `Backend error (${response.status})`);
   }
 
   return data as AnalyzePRClientResponse;
 }
 
 /**
- * Retrieves SHA-256 deduplication cache telemetry from GET /api/cache-stats
+ * Calls GET /api/cache-stats on the existing Express backend.
  */
 export async function fetchCacheTelemetry(): Promise<CacheStatsPayload | null> {
   try {
@@ -158,17 +155,5 @@ export async function fetchCacheTelemetry(): Promise<CacheStatsPayload | null> {
     return (await response.json()) as CacheStatsPayload;
   } catch {
     return null;
-  }
-}
-
-/**
- * Checks backend bridge health via GET /api/health
- */
-export async function checkBackendHealth(): Promise<boolean> {
-  try {
-    const response = await fetch('/api/health');
-    return response.ok;
-  } catch {
-    return false;
   }
 }

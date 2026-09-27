@@ -1,30 +1,53 @@
-import React, { useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import {
   Activity,
-  GitFork,
-  FileSpreadsheet,
-  Copy,
-  Check,
-  Download,
-  Terminal,
   AlertOctagon,
-  CheckSquare,
-  Square,
+  Check,
+  Copy,
+  Download,
+  GitFork,
+  Layers,
   RotateCcw,
-  BellRing,
+  Terminal,
 } from 'lucide-react';
 import type {
   DependencyNode,
-  RiskScoreBreakdown,
   ReleaseNotes,
+  RiskScoreBreakdown,
   SeverityLevel,
 } from '../types/sentinal';
-import type { BlastRadiusGraphPayload } from '../services/sentinelApi';
+import type { BlastRadiusGraphPayload } from '../../server/adapters/agentAdapters';
 
 interface BlastRadiusHudProps {
   blastRadius: BlastRadiusGraphPayload;
   riskScore: RiskScoreBreakdown;
   releaseNotes: ReleaseNotes;
+}
+
+function getTierBadgeStyle(tier: RiskScoreBreakdown['riskTier']) {
+  switch (tier) {
+    case 'CRITICAL':
+      return 'text-rose-400 border-rose-500/50 bg-rose-950/30';
+    case 'HIGH':
+      return 'text-amber-400 border-amber-500/50 bg-amber-950/30';
+    case 'MODERATE':
+      return 'text-yellow-300 border-yellow-500/40 bg-yellow-950/25';
+    default:
+      return 'text-emerald-400 border-emerald-500/40 bg-emerald-950/25';
+  }
+}
+
+function getNodeStroke(risk: SeverityLevel): string {
+  switch (risk) {
+    case 'critical':
+      return '#F43F5E';
+    case 'high':
+      return '#F59E0B';
+    case 'medium':
+      return '#EAB308';
+    default:
+      return '#38BDF8';
+  }
 }
 
 const TIER_LABELS: Record<number, string> = {
@@ -34,127 +57,44 @@ const TIER_LABELS: Record<number, string> = {
   3: 'Tier 3 · Data Models',
 };
 
-function getRiskColor(risk: SeverityLevel | RiskScoreBreakdown['riskTier']) {
-  const normalized = risk.toLowerCase();
-  if (normalized === 'critical') {
-    return {
-      stroke: '#F43F5E',
-      fill: '#4C0519',
-      text: 'text-rose-400',
-      bar: 'bg-rose-500',
-      border: 'border-rose-500/40',
-    };
-  }
-  if (normalized === 'high') {
-    return {
-      stroke: '#F59E0B',
-      fill: '#451A03',
-      text: 'text-amber-400',
-      bar: 'bg-amber-500',
-      border: 'border-amber-500/40',
-    };
-  }
-  if (normalized === 'moderate' || normalized === 'medium') {
-    return {
-      stroke: '#38BDF8',
-      fill: '#082F49',
-      text: 'text-sky-400',
-      bar: 'bg-sky-400',
-      border: 'border-sky-500/40',
-    };
-  }
-  return {
-    stroke: '#10B981',
-    fill: '#064E3B',
-    text: 'text-emerald-400',
-    bar: 'bg-emerald-500',
-    border: 'border-emerald-500/40',
-  };
-}
-
-export const BlastRadiusHud: React.FC<BlastRadiusHudProps> = ({
+export function BlastRadiusHud({
   blastRadius,
   riskScore,
   releaseNotes,
-}) => {
+}: BlastRadiusHudProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(
     blastRadius.nodes[0]?.id ?? null
   );
   const [qaState, setQaState] = useState<Record<string, boolean>>({});
   const [copiedMarkdown, setCopiedMarkdown] = useState(false);
-  const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
+  const [copiedTestIdx, setCopiedTestIdx] = useState<number | null>(null);
 
-  // Compute deterministic SVG coordinates for nodes grouped by tier (0..3)
-  const layoutNodes = useMemo(() => {
+  // Deterministic SVG coordinates based on node tier
+  const positionedGraph = useMemo(() => {
     const tiers = [0, 1, 2, 3];
-    const positioned: Array<DependencyNode & { cx: number; cy: number }> = [];
-    const svgWidth = 860;
-    const svgHeight = 320;
-    const colPositions = [125, 345, 575, 760];
+    const coords = new Map<string, { x: number; y: number; node: DependencyNode }>();
 
-    tiers.forEach((tierIdx) => {
-      const nodesInTier = blastRadius.nodes.filter((n) => n.tier === tierIdx);
-      const count = nodesInTier.length;
-      nodesInTier.forEach((node, idx) => {
-        const spacing = svgHeight / (count + 1);
-        positioned.push({
-          ...node,
-          cx: colPositions[tierIdx] ?? 400,
-          cy: Math.round(spacing * (idx + 1)),
-        });
+    tiers.forEach((tier) => {
+      const group = blastRadius.nodes.filter((n) => n.tier === tier);
+      const x = 115 + tier * 215;
+      group.forEach((node, index) => {
+        const total = group.length;
+        const spacing = 260 / (total + 1);
+        const y = Math.round(spacing * (index + 1));
+        coords.set(node.id, { x, y, node });
       });
     });
 
-    return positioned;
+    return coords;
   }, [blastRadius.nodes]);
 
-  const nodeMap = useMemo(() => {
-    const map = new Map<string, DependencyNode & { cx: number; cy: number }>();
-    layoutNodes.forEach((n) => map.set(n.id, n));
-    return map;
-  }, [layoutNodes]);
+  const selectedNode =
+    blastRadius.nodes.find((n) => n.id === selectedNodeId) ??
+    blastRadius.nodes[0] ??
+    null;
 
-  const selectedNode = useMemo(
-    () => layoutNodes.find((n) => n.id === selectedNodeId) ?? layoutNodes[0] ?? null,
-    [layoutNodes, selectedNodeId]
-  );
-
-  // Toggle QA checklist item state
-  const isQaChecked = (id: string, defaultChecked: boolean) =>
-    qaState[id] !== undefined ? qaState[id] : defaultChecked;
-
-  const toggleQaItem = (id: string, defaultChecked: boolean) => {
-    setQaState((prev) => ({
-      ...prev,
-      [id]: !isQaChecked(id, defaultChecked),
-    }));
-  };
-
-  // Build Markdown export for Release Readiness & Rollback Brief
-  const buildReleaseBriefMarkdown = () => {
-    const breakingList =
-      releaseNotes.breakingChanges.length > 0
-        ? releaseNotes.breakingChanges.map((b) => `- ${b}`).join('\n')
-        : '- Zero breaking changes detected.';
-
-    const squadAlerts =
-      releaseNotes.downstreamServicesToAlert.length > 0
-        ? releaseNotes.downstreamServicesToAlert.map((s) => `- ${s}`).join('\n')
-        : '- No downstream team alerts required.';
-
-    const qaList =
-      releaseNotes.qaChecklist.length > 0
-        ? releaseNotes.qaChecklist
-            .map((q) => `- [${isQaChecked(q.id, q.checked) ? 'x' : ' '}] ${q.item}`)
-            .join('\n')
-        : '- [x] Standard CI suite passed.';
-
-    const rollbackList =
-      releaseNotes.rollbackPlan.length > 0
-        ? releaseNotes.rollbackPlan.map((r) => `- ${r}`).join('\n')
-        : '- Standard git revert.';
-
-    return [
+  const buildReleaseMarkdown = () => {
+    const lines = [
       `# ${releaseNotes.title}`,
       `**Target Version:** \`${releaseNotes.versionTarget}\` · **Composite Risk Score:** \`${riskScore.overallScore}/100 (${riskScore.riskTier})\``,
       '',
@@ -162,404 +102,392 @@ export const BlastRadiusHud: React.FC<BlastRadiusHudProps> = ({
       releaseNotes.executiveSummary,
       '',
       `## Breaking Changes`,
-      breakingList,
+      ...(releaseNotes.breakingChanges.length > 0
+        ? releaseNotes.breakingChanges.map((b) => `- ⚠️ ${b}`)
+        : ['- None identified']),
       '',
       `## Downstream Squads to Alert`,
-      squadAlerts,
+      ...(releaseNotes.downstreamServicesToAlert.length > 0
+        ? releaseNotes.downstreamServicesToAlert.map((s) => `- 📣 ${s}`)
+        : ['- No external squad coordination required']),
       '',
       `## Pre-Production QA Checklist`,
-      qaList,
+      ...releaseNotes.qaChecklist.map((item) => {
+        const checked = qaState[item.id] ?? item.checked;
+        return `- [${checked ? 'x' : ' '}] ${item.item}`;
+      }),
       '',
       `## Automated Rollback Runbook`,
-      rollbackList,
-    ].join('\n');
+      ...releaseNotes.rollbackPlan.map((step) => `- ${step}`),
+    ];
+    return lines.join('\n');
   };
 
   const handleCopyMarkdown = () => {
-    navigator.clipboard.writeText(buildReleaseBriefMarkdown());
+    navigator.clipboard.writeText(buildReleaseMarkdown());
     setCopiedMarkdown(true);
-    setTimeout(() => setCopiedMarkdown(false), 1800);
+    setTimeout(() => setCopiedMarkdown(false), 2000);
   };
 
   const handleDownloadMarkdown = () => {
-    const blob = new Blob([buildReleaseBriefMarkdown()], { type: 'text/markdown;charset=utf-8' });
+    const blob = new Blob([buildReleaseMarkdown()], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `release-brief-${releaseNotes.versionTarget || 'pr'}.md`;
+    link.download = `release-gate-${releaseNotes.versionTarget || 'brief'}.md`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   };
 
-  const handleCopyTestCmd = (cmd: string) => {
-    navigator.clipboard.writeText(cmd);
-    setCopiedCmd(cmd);
-    setTimeout(() => setCopiedCmd(null), 1500);
-  };
-
-  const tierStyle = getRiskColor(riskScore.riskTier);
-
-  const factorRows = [
+  const factors = [
     {
       label: 'Breaking API Surface',
-      value: riskScore.factors.breakingApiSurface,
+      score: riskScore.factors.breakingApiSurface,
       max: 35,
+      barColor: 'bg-rose-500',
     },
     {
-      label: 'Downstream Service Fanout',
-      value: riskScore.factors.downstreamFanout,
+      label: 'Downstream Fanout',
+      score: riskScore.factors.downstreamFanout,
       max: 25,
+      barColor: 'bg-amber-500',
     },
     {
       label: 'Security Criticality',
-      value: riskScore.factors.securityCriticality,
+      score: riskScore.factors.securityCriticality,
       max: 25,
+      barColor: 'bg-sky-400',
     },
     {
       label: 'Test Coverage Delta',
-      value: riskScore.factors.testCoverageDelta,
+      score: riskScore.factors.testCoverageDelta,
       max: 15,
+      barColor: 'bg-indigo-400',
     },
   ];
 
-  const breakingEdgesCount = blastRadius.edges.filter((e) => e.isBreakingChange).length;
-
   return (
     <div className="space-y-5">
-      {/* Top Row: Deployment Risk Index HUD + Interactive Downstream Topology Graph */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
-        {/* Deployment Risk Index Widget (4 cols) */}
-        <div className="xl:col-span-4 border border-[#1E293B] bg-[#0D131F] rounded-lg p-5 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between mb-4">
+      {/* Top Row: Deployment Risk Index (4 cols) + Interactive Downstream Topology Graph (8 cols) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
+        {/* Deployment Risk Index Widget */}
+        <div className="lg:col-span-4 border border-[#1E293B] bg-[#0D131F] rounded-lg p-4 flex flex-col justify-between space-y-4">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Activity className="w-4 h-4 text-sky-400" />
-                <h3 className="text-sm font-semibold text-slate-100">Deployment Risk Index</h3>
+                <Activity className="w-4 h-4 text-rose-400" />
+                <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+                  Deployment Risk Index
+                </span>
               </div>
-              <span className={`font-mono text-xs font-semibold ${tierStyle.text}`}>
-                {riskScore.riskTier} RISK
+              <span
+                className={`px-2.5 py-0.5 rounded border font-mono text-xs font-bold ${getTierBadgeStyle(
+                  riskScore.riskTier
+                )}`}
+              >
+                {riskScore.riskTier}
               </span>
             </div>
 
-            {/* Score Display */}
-            <div className="flex items-baseline justify-between p-4 rounded bg-[#090D16] border border-[#1E293B] mb-4">
-              <div>
-                <div className="text-xs text-slate-400 mb-0.5">Composite Blast Score</div>
-                <div className="flex items-baseline gap-1.5 font-mono tabular-nums">
-                  <span className={`text-3xl font-bold ${tierStyle.text}`}>
-                    {riskScore.overallScore}
-                  </span>
-                  <span className="text-sm text-slate-500">/ 100</span>
-                </div>
-              </div>
-              <div className="text-right font-mono text-xs text-slate-400 tabular-nums">
-                <div>{blastRadius.nodes.length} mapped nodes</div>
-                <div className="text-rose-400">{breakingEdgesCount} breaking edges</div>
-              </div>
+            <div className="flex items-baseline gap-2 pt-1">
+              <span className="font-mono text-4xl font-bold text-slate-100 tabular-nums">
+                {riskScore.overallScore}
+              </span>
+              <span className="font-mono text-sm text-slate-400">/ 100</span>
             </div>
 
-            {/* 4 Weighted Risk Factor Bars */}
-            <div className="space-y-3 mb-4">
-              {factorRows.map((factor) => {
-                const pct = Math.min(100, Math.round((factor.value / factor.max) * 100));
-                return (
-                  <div key={factor.label}>
-                    <div className="flex items-center justify-between text-xs mb-1">
-                      <span className="text-slate-300">{factor.label}</span>
-                      <span className="font-mono tabular-nums text-slate-200">
-                        {factor.value} <span className="text-slate-500">/ {factor.max}</span>
-                      </span>
-                    </div>
-                    <div className="w-full h-1.5 bg-[#090D16] rounded overflow-hidden border border-[#1E293B]">
-                      <div
-                        className={`h-full ${tierStyle.bar} transition-all duration-300`}
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              {riskScore.summary}
+            </p>
           </div>
 
-          <p className="text-xs text-slate-300 leading-relaxed p-3 rounded bg-[#090D16] border border-[#1E293B]">
-            {riskScore.summary}
-          </p>
+          {/* 4-Factor Deterministic Breakdown */}
+          <div className="space-y-2.5 pt-3 border-t border-[#1E293B]">
+            {factors.map((f) => {
+              const pct = Math.min(100, Math.round((f.score / f.max) * 100));
+              return (
+                <div key={f.label} className="space-y-1">
+                  <div className="flex justify-between text-xs font-mono">
+                    <span className="text-slate-400">{f.label}</span>
+                    <span className="text-slate-200 tabular-nums">
+                      {f.score} / {f.max}
+                    </span>
+                  </div>
+                  <div className="h-1.5 w-full bg-[#090D16] rounded-full overflow-hidden border border-[#1E293B]">
+                    <div
+                      className={`h-full ${f.barColor} transition-all duration-300`}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
 
-        {/* Downstream Topology DAG Graph (8 cols) */}
-        <div className="xl:col-span-8 border border-[#1E293B] bg-[#0D131F] rounded-lg overflow-hidden flex flex-col">
-          <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 bg-[#090D16] border-b border-[#1E293B]">
+        {/* Downstream Topology Graph (Interactive SVG DAG) */}
+        <div className="lg:col-span-8 border border-[#1E293B] bg-[#0D131F] rounded-lg p-4 flex flex-col justify-between space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <GitFork className="w-4 h-4 text-sky-400" />
-              <h3 className="text-sm font-semibold text-slate-100">
-                Downstream Dependency Topology
-              </h3>
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-200">
+                Downstream Topology Graph
+              </span>
+              <span className="text-xs font-mono text-slate-400">
+                · {blastRadius.nodes.length} Nodes · {blastRadius.edges.length} Edges
+              </span>
             </div>
-            <div className="flex items-center gap-4 text-xs font-mono text-slate-400">
+
+            <div className="flex items-center gap-4 text-[11px] font-mono text-slate-400">
               <span className="flex items-center gap-1.5">
                 <span className="w-3 h-0.5 bg-rose-500 inline-block" />
-                <span>Breaking Contract</span>
+                Breaking Contract Edge
               </span>
               <span className="flex items-center gap-1.5">
                 <span className="w-3 h-0.5 bg-slate-500 inline-block" />
-                <span>Standard Call</span>
+                Standard Call Edge
               </span>
             </div>
           </div>
 
           {/* Interactive SVG Canvas */}
-          <div className="relative bg-[#090D16] flex-1 min-h-[300px] overflow-x-auto">
-            {layoutNodes.length === 0 ? (
-              <div className="flex items-center justify-center h-72 text-xs text-slate-400">
-                No downstream dependency graph nodes reported for this diff.
-              </div>
-            ) : (
-              <svg
-                viewBox="0 0 880 320"
-                className="w-full h-full min-w-[680px] select-none"
-                role="img"
-                aria-label="Downstream Dependency Topology Graph"
-              >
-                {/* Tier Column Headers */}
-                {[0, 1, 2, 3].map((tier) => {
-                  const xPos = [125, 345, 575, 760][tier];
-                  return (
-                    <g key={tier}>
-                      <line
-                        x1={xPos}
-                        y1={32}
-                        x2={xPos}
-                        y2={305}
-                        stroke="#1E293B"
-                        strokeDasharray="3 3"
-                        strokeWidth={1}
-                      />
-                      <text
-                        x={xPos}
-                        y={20}
-                        textAnchor="middle"
-                        className="fill-slate-400 text-[10px] font-mono"
-                      >
-                        {TIER_LABELS[tier]}
-                      </text>
-                    </g>
-                  );
-                })}
+          <div className="w-full overflow-x-auto bg-[#090D16] border border-[#1E293B] rounded-md">
+            <svg
+              viewBox="0 0 880 265"
+              className="w-full min-w-[680px] h-[250px] select-none"
+            >
+              <defs>
+                <marker
+                  id="arrow-breaking"
+                  markerWidth="8"
+                  markerHeight="8"
+                  refX="7"
+                  refY="4"
+                  orient="auto"
+                >
+                  <path d="M0,1 L7,4 L0,7 Z" fill="#F43F5E" />
+                </marker>
+                <marker
+                  id="arrow-normal"
+                  markerWidth="8"
+                  markerHeight="8"
+                  refX="7"
+                  refY="4"
+                  orient="auto"
+                >
+                  <path d="M0,1 L7,4 L0,7 Z" fill="#475569" />
+                </marker>
+              </defs>
 
-                {/* Edges */}
-                {blastRadius.edges.map((edge, idx) => {
-                  const src = nodeMap.get(edge.source);
-                  const tgt = nodeMap.get(edge.target);
-                  if (!src || !tgt) return null;
+              {/* Tier Column Headers */}
+              {[0, 1, 2, 3].map((tier) => (
+                <g key={tier}>
+                  <text
+                    x={115 + tier * 215}
+                    y={20}
+                    textAnchor="middle"
+                    fill="#64748B"
+                    fontSize="10"
+                    fontFamily="JetBrains Mono, monospace"
+                  >
+                    {TIER_LABELS[tier]}
+                  </text>
+                  <line
+                    x1={115 + tier * 215}
+                    y1={28}
+                    x2={115 + tier * 215}
+                    y2={250}
+                    stroke="#1E293B"
+                    strokeDasharray="3 3"
+                  />
+                </g>
+              ))}
 
-                  const isConnectedToSelected =
-                    selectedNode &&
-                    (edge.source === selectedNode.id || edge.target === selectedNode.id);
+              {/* Directed Edges */}
+              {blastRadius.edges.map((edge, idx) => {
+                const sourcePos = positionedGraph.get(edge.source);
+                const targetPos = positionedGraph.get(edge.target);
+                if (!sourcePos || !targetPos) return null;
 
-                  const strokeColor = edge.isBreakingChange
-                    ? '#F43F5E'
-                    : isConnectedToSelected
-                    ? '#38BDF8'
-                    : '#475569';
+                const x1 = sourcePos.x + 68;
+                const y1 = sourcePos.y;
+                const x2 = targetPos.x - 68;
+                const y2 = targetPos.y;
+                const midX = (x1 + x2) / 2;
 
-                  const midX = (src.cx + tgt.cx) / 2;
-                  const pathD = `M ${src.cx + 68} ${src.cy} C ${midX} ${src.cy}, ${midX} ${tgt.cy}, ${tgt.cx - 68} ${tgt.cy}`;
+                return (
+                  <g key={idx}>
+                    <path
+                      d={`M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`}
+                      fill="none"
+                      stroke={edge.isBreakingChange ? '#F43F5E' : '#475569'}
+                      strokeWidth={edge.isBreakingChange ? 2 : 1.5}
+                      strokeDasharray={edge.isBreakingChange ? 'none' : '4 3'}
+                      markerEnd={
+                        edge.isBreakingChange
+                          ? 'url(#arrow-breaking)'
+                          : 'url(#arrow-normal)'
+                      }
+                    />
+                  </g>
+                );
+              })}
 
-                  return (
-                    <g key={`${edge.source}-${edge.target}-${idx}`}>
-                      <path
-                        d={pathD}
-                        fill="none"
-                        stroke={strokeColor}
-                        strokeWidth={isConnectedToSelected ? 2.2 : 1.5}
-                        strokeDasharray={edge.isBreakingChange ? '5 4' : undefined}
-                        opacity={
-                          !selectedNode || isConnectedToSelected ? 0.95 : 0.35
-                        }
-                      />
-                      <text
-                        x={midX}
-                        y={(src.cy + tgt.cy) / 2 - 5}
-                        textAnchor="middle"
-                        className="fill-slate-400 text-[9px] font-mono"
-                      >
-                        {edge.relation}
-                      </text>
-                    </g>
-                  );
-                })}
+              {/* Nodes */}
+              {Array.from(positionedGraph.values()).map(({ x, y, node }) => {
+                const isSelected = selectedNode?.id === node.id;
+                const strokeColor = getNodeStroke(node.risk);
 
-                {/* Nodes */}
-                {layoutNodes.map((node) => {
-                  const riskColors = getRiskColor(node.risk);
-                  const isSelected = selectedNode?.id === node.id;
-
-                  return (
-                    <g
-                      key={node.id}
-                      transform={`translate(${node.cx - 68}, ${node.cy - 22})`}
-                      onClick={() => setSelectedNodeId(node.id)}
-                      className="cursor-pointer"
+                return (
+                  <g
+                    key={node.id}
+                    transform={`translate(${x - 66}, ${y - 20})`}
+                    onClick={() => setSelectedNodeId(node.id)}
+                    className="cursor-pointer"
+                  >
+                    <rect
+                      width="132"
+                      height="40"
+                      rx="6"
+                      fill={isSelected ? '#131C2E' : '#0D131F'}
+                      stroke={strokeColor}
+                      strokeWidth={isSelected ? '2' : '1.2'}
+                    />
+                    <text
+                      x="10"
+                      y="17"
+                      fill="#F1F5F9"
+                      fontSize="10"
+                      fontWeight="600"
+                      fontFamily="JetBrains Mono, monospace"
                     >
-                      <rect
-                        width={136}
-                        height={44}
-                        rx={6}
-                        fill={isSelected ? riskColors.fill : '#0D131F'}
-                        stroke={isSelected ? '#38BDF8' : riskColors.stroke}
-                        strokeWidth={isSelected ? 2 : 1.2}
-                      />
-                      <text
-                        x={10}
-                        y={18}
-                        className="fill-slate-100 text-[11px] font-mono font-semibold"
-                      >
-                        {node.label.length > 16
-                          ? `${node.label.slice(0, 15)}…`
-                          : node.label}
-                      </text>
-                      <text
-                        x={10}
-                        y={34}
-                        className="fill-slate-400 text-[9px] font-mono"
-                      >
-                        {node.risk.toUpperCase()} · fanout:{node.fanoutCount}
-                      </text>
-                    </g>
-                  );
-                })}
-              </svg>
-            )}
+                      {node.label.length > 16
+                        ? `${node.label.slice(0, 15)}…`
+                        : node.label}
+                    </text>
+                    <text
+                      x="10"
+                      y="31"
+                      fill="#94A3B8"
+                      fontSize="9"
+                      fontFamily="JetBrains Mono, monospace"
+                    >
+                      fanout:{node.fanoutCount} · {node.risk.toUpperCase()}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
           </div>
 
-          {/* Selected Node Inspector Footer */}
+          {/* Selected Node Inspector Bar */}
           {selectedNode && (
-            <div className="px-4 py-3 bg-[#0D131F] border-t border-[#1E293B] flex flex-wrap items-center justify-between gap-3 text-xs">
-              <div className="flex items-center gap-2.5">
+            <div className="px-3 py-2 rounded bg-[#090D16] border border-[#1E293B] flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2">
                 <span className="font-mono font-semibold text-sky-400">
                   {selectedNode.label}
                 </span>
                 <span className="text-slate-500">·</span>
                 <span className="text-slate-300">{selectedNode.description}</span>
               </div>
-              <div className="font-mono text-slate-400 tabular-nums">
-                Tier {selectedNode.tier} · Fanout: {selectedNode.fanoutCount} callers · Risk:{' '}
-                <span className={getRiskColor(selectedNode.risk).text}>
-                  {selectedNode.risk.toUpperCase()}
-                </span>
-              </div>
+              <span className="font-mono text-slate-400 tabular-nums">
+                Downstream Fanout: {selectedNode.fanoutCount} caller(s)
+              </span>
             </div>
           )}
         </div>
       </div>
 
-      {/* Bottom Row: Downstream Impact Table + Release Readiness & Rollback Brief */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
-        {/* Downstream Impact & Regression Test Table (7 cols) */}
-        <div className="xl:col-span-7 border border-[#1E293B] bg-[#0D131F] rounded-lg overflow-hidden">
-          <div className="px-4 py-3 bg-[#090D16] border-b border-[#1E293B] flex items-center justify-between">
+      {/* Bottom Row: Impacted Component Matrix (6 cols) + Release Readiness & Rollback Brief (6 cols) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+        {/* Impacted Downstream Components & Regression Commands */}
+        <div className="lg:col-span-6 border border-[#1E293B] bg-[#0D131F] rounded-lg p-4 space-y-3">
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Terminal className="w-4 h-4 text-sky-400" />
-              <h3 className="text-sm font-semibold text-slate-100">
-                Downstream Impact & Regression Verification Matrix
+              <Layers className="w-4 h-4 text-amber-400" />
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-200">
+                Impacted Downstream Services & Contracts
               </h3>
             </div>
-            <span className="text-xs font-mono text-slate-400 tabular-nums">
-              {blastRadius.table.length} affected components
+            <span className="font-mono text-xs text-slate-400">
+              {blastRadius.table.length} affected
             </span>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className="border-b border-[#1E293B] bg-[#090D16]/50 text-slate-400 font-mono">
-                  <th className="py-2.5 px-4 font-medium">Component</th>
-                  <th className="py-2.5 px-3 font-medium">Impact Vector</th>
-                  <th className="py-2.5 px-3 font-medium text-right">Callers</th>
-                  <th className="py-2.5 px-4 font-medium">Recommended Verification</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#1E293B]/60">
-                {blastRadius.table.map((row) => {
-                  const sevStyle = getRiskColor(row.severity);
-                  return (
-                    <tr key={row.dependentComponent} className="hover:bg-[#111827]/60">
-                      <td className="py-3 px-4 align-top">
-                        <div className="font-mono text-slate-100 font-medium">
-                          {row.dependentComponent}
-                        </div>
-                        <div className="text-[11px] text-slate-400">
-                          {row.componentType} ·{' '}
-                          <span className={`font-mono ${sevStyle.text}`}>
-                            {row.severity.toUpperCase()}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="py-3 px-3 align-top text-slate-300">
-                        {row.impactType}
-                      </td>
-                      <td className="py-3 px-3 align-top text-right font-mono tabular-nums text-slate-200">
-                        {row.affectedCallers}
-                      </td>
-                      <td className="py-3 px-4 align-top">
-                        <div className="flex items-center justify-between gap-2 p-2 rounded bg-[#090D16] border border-[#1E293B] font-mono text-[11px] text-emerald-300">
-                          <span className="truncate">{row.recommendedTest}</span>
-                          <button
-                            type="button"
-                            onClick={() => handleCopyTestCmd(row.recommendedTest)}
-                            className="text-slate-400 hover:text-white shrink-0"
-                            title="Copy test command"
-                          >
-                            {copiedCmd === row.recommendedTest ? (
-                              <Check className="w-3.5 h-3.5 text-emerald-400" />
-                            ) : (
-                              <Copy className="w-3.5 h-3.5" />
-                            )}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div className="space-y-2.5">
+            {blastRadius.table.map((row, idx) => (
+              <div
+                key={idx}
+                className="p-3 rounded-md bg-[#090D16] border border-[#1E293B] space-y-2"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-mono text-xs font-semibold text-slate-100">
+                    {row.dependentComponent}
+                  </span>
+                  <span className="font-mono text-[11px] text-amber-300">
+                    {row.impactType} · {row.affectedCallers} callers
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-2 pt-1 border-t border-[#1E293B]/70">
+                  <div className="flex items-center gap-1.5 font-mono text-[11px] text-emerald-300 truncate">
+                    <Terminal className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    <span className="truncate">{row.recommendedTest}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(row.recommendedTest);
+                      setCopiedTestIdx(idx);
+                      setTimeout(() => setCopiedTestIdx(null), 1500);
+                    }}
+                    className="px-2 py-0.5 rounded border border-[#1E293B] bg-[#0D131F] text-[11px] font-mono text-slate-300 hover:text-white shrink-0 cursor-pointer"
+                  >
+                    {copiedTestIdx === idx ? 'Copied' : 'Copy Cmd'}
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
-        {/* Release Readiness & Rollback Brief (5 cols) */}
-        <div className="xl:col-span-5 border border-[#1E293B] bg-[#0D131F] rounded-lg overflow-hidden">
-          <div className="px-4 py-3 bg-[#090D16] border-b border-[#1E293B] flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <FileSpreadsheet className="w-4 h-4 text-sky-400" />
+        {/* One-Click Exportable Release Readiness & Rollback Brief */}
+        <div className="lg:col-span-6 border border-[#1E293B] bg-[#0D131F] rounded-lg p-4 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <span className="font-mono text-[11px] text-sky-400 font-semibold">
+                {releaseNotes.versionTarget}
+              </span>
               <h3 className="text-sm font-semibold text-slate-100">
-                Release Readiness & Rollback Brief
+                {releaseNotes.title}
               </h3>
             </div>
+
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={handleCopyMarkdown}
-                className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-200 hover:text-white bg-[#131C2E] border border-[#1E293B] rounded transition-colors"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-mono border border-[#1E293B] bg-[#090D16] text-slate-200 hover:border-sky-500/50 cursor-pointer"
               >
                 {copiedMarkdown ? (
                   <>
                     <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Copied</span>
+                    <span className="text-emerald-400">Copied MD</span>
                   </>
                 ) : (
                   <>
-                    <Copy className="w-3.5 h-3.5" />
-                    <span>Copy MD</span>
+                    <Copy className="w-3.5 h-3.5 text-sky-400" />
+                    <span>Copy Markdown</span>
                   </>
                 )}
               </button>
+
               <button
                 type="button"
                 onClick={handleDownloadMarkdown}
-                className="flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-950 bg-sky-400 hover:bg-sky-300 rounded transition-colors"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-mono bg-sky-500/20 border border-sky-500/40 text-sky-300 hover:bg-sky-500/30 cursor-pointer"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Export .md</span>
@@ -567,111 +495,77 @@ export const BlastRadiusHud: React.FC<BlastRadiusHudProps> = ({
             </div>
           </div>
 
-          <div className="p-4 space-y-4">
-            {/* Release Header & Executive Summary */}
-            <div>
-              <div className="flex items-center justify-between gap-2 mb-1">
-                <h4 className="text-xs font-semibold text-slate-100">
-                  {releaseNotes.title}
-                </h4>
-                <span className="font-mono text-xs text-sky-400">
-                  {releaseNotes.versionTarget}
-                </span>
+          <p className="text-xs text-slate-300 leading-relaxed">
+            {releaseNotes.executiveSummary}
+          </p>
+
+          {/* Breaking Changes & Downstream Squad Alerts */}
+          {releaseNotes.breakingChanges.length > 0 && (
+            <div className="p-3 rounded-md bg-rose-950/20 border border-rose-500/40 space-y-1.5">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-rose-300">
+                <AlertOctagon className="w-3.5 h-3.5" />
+                <span>Breaking API / Contract Mutations</span>
               </div>
-              <p className="text-xs text-slate-300 leading-relaxed">
-                {releaseNotes.executiveSummary}
-              </p>
+              <ul className="list-disc list-inside text-xs text-rose-200/90 space-y-1">
+                {releaseNotes.breakingChanges.map((bc, i) => (
+                  <li key={i}>{bc}</li>
+                ))}
+              </ul>
             </div>
+          )}
 
-            {/* Breaking Changes */}
-            {releaseNotes.breakingChanges.length > 0 && (
-              <div className="p-3 rounded bg-rose-950/20 border border-rose-500/30 space-y-1.5">
-                <div className="flex items-center gap-1.5 text-xs font-semibold text-rose-300">
-                  <AlertOctagon className="w-3.5 h-3.5 shrink-0" />
-                  <span>Breaking API & Contract Changes</span>
-                </div>
-                <ul className="space-y-1 text-xs text-rose-200/90 list-disc list-inside">
-                  {releaseNotes.breakingChanges.map((bc, idx) => (
-                    <li key={idx}>{bc}</li>
-                  ))}
-                </ul>
+          {/* Interactive QA Verification Checklist */}
+          {releaseNotes.qaChecklist.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                Pre-Release QA Verification Gate
               </div>
-            )}
-
-            {/* PM / Downstream Squad Alerts */}
-            {releaseNotes.downstreamServicesToAlert.length > 0 && (
               <div className="space-y-1.5">
-                <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-300">
-                  <BellRing className="w-3.5 h-3.5 shrink-0" />
-                  <span>Downstream Squads & PM Alerts</span>
-                </div>
-                <div className="space-y-1">
-                  {releaseNotes.downstreamServicesToAlert.map((service, idx) => (
-                    <div
-                      key={idx}
-                      className="p-2 rounded bg-[#090D16] border border-[#1E293B] text-xs text-slate-300"
+                {releaseNotes.qaChecklist.map((item) => {
+                  const isChecked = qaState[item.id] ?? item.checked;
+                  return (
+                    <label
+                      key={item.id}
+                      className="flex items-start gap-2.5 p-2 rounded bg-[#090D16] border border-[#1E293B] text-xs cursor-pointer"
                     >
-                      {service}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Interactive QA Checklist */}
-            {releaseNotes.qaChecklist.length > 0 && (
-              <div className="space-y-1.5">
-                <div className="text-xs font-semibold text-slate-200">
-                  Pre-Production QA Verification Checklist
-                </div>
-                <div className="space-y-1">
-                  {releaseNotes.qaChecklist.map((item) => {
-                    const checked = isQaChecked(item.id, item.checked);
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => toggleQaItem(item.id, item.checked)}
-                        className="w-full flex items-start gap-2 p-2 rounded bg-[#090D16] border border-[#1E293B] text-left text-xs hover:border-slate-700 transition-colors"
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() =>
+                          setQaState((prev) => ({ ...prev, [item.id]: !isChecked }))
+                        }
+                        className="mt-0.5 accent-sky-400 rounded cursor-pointer"
+                      />
+                      <span
+                        className={
+                          isChecked ? 'line-through text-slate-500' : 'text-slate-200'
+                        }
                       >
-                        {checked ? (
-                          <CheckSquare className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                        ) : (
-                          <Square className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
-                        )}
-                        <span
-                          className={
-                            checked ? 'text-slate-400 line-through' : 'text-slate-200'
-                          }
-                        >
-                          {item.item}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
+                        {item.item}
+                      </span>
+                    </label>
+                  );
+                })}
               </div>
-            )}
+            </div>
+          )}
 
-            {/* Automated Rollback Runbook */}
-            {releaseNotes.rollbackPlan.length > 0 && (
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-200">
-                  <RotateCcw className="w-3.5 h-3.5 text-sky-400" />
-                  <span>Automated Rollback Runbook</span>
-                </div>
-                <div className="p-3 rounded bg-[#090D16] border border-[#1E293B] space-y-1.5 font-mono text-[11px] text-slate-300">
-                  {releaseNotes.rollbackPlan.map((step, idx) => (
-                    <div key={idx} className="leading-relaxed">
-                      {step}
-                    </div>
-                  ))}
-                </div>
+          {/* Automated Rollback Runbook */}
+          {releaseNotes.rollbackPlan.length > 0 && (
+            <div className="p-3 rounded-md bg-[#090D16] border border-[#1E293B] space-y-1.5">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-300">
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Automated Rollback Runbook</span>
               </div>
-            )}
-          </div>
+              <div className="space-y-1 font-mono text-[11px] text-slate-300">
+                {releaseNotes.rollbackPlan.map((step, i) => (
+                  <div key={i}>{step}</div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
-};
+}

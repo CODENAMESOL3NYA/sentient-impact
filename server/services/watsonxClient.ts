@@ -16,12 +16,15 @@ export function getWatsonxClient(): WatsonxClient {
     async chat(systemPrompt: string, userContent: string): Promise<WatsonxChatResult> {
       const apiKey = process.env.WATSONX_AI_APIKEY || process.env.WATSONX_API_KEY;
       const projectId = process.env.WATSONX_AI_PROJECT_ID || process.env.WATSONX_PROJECT_ID;
-      const serviceUrl = process.env.WATSONX_AI_SERVICE_URL || 'https://us-south.ml.cloud.ibm.com';
+      const serviceUrl =
+        process.env.WATSONX_AI_SERVICE_URL ||
+        process.env.WATSONX_URL ||
+        'https://us-south.ml.cloud.ibm.com';
       const modelId = process.env.WATSONX_MODEL_ID || 'ibm/granite-3-8b-instruct';
 
       if (!apiKey || !projectId) {
         throw new Error(
-          'Missing WATSONX_AI_APIKEY or WATSONX_AI_PROJECT_ID environment variables for live watsonx execution.'
+          'Missing WATSONX_API_KEY or WATSONX_PROJECT_ID environment variables for live watsonx execution.'
         );
       }
 
@@ -48,7 +51,8 @@ export function getWatsonxClient(): WatsonxClient {
 
       return {
         text,
-        promptTokens: usage?.prompt_tokens ?? Math.ceil((systemPrompt.length + userContent.length) / 4),
+        promptTokens:
+          usage?.prompt_tokens ?? Math.ceil((systemPrompt.length + userContent.length) / 4),
         completionTokens: usage?.completion_tokens ?? Math.ceil(text.length / 4),
       };
     },
