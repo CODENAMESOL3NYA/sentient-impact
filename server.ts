@@ -41,13 +41,14 @@ app.get('/api/health',(req,res)=>{
 
 //Mount api route
 app.use('/api',apiRoutes);
+app.use('/api/*',notFoundHandler);
 
 //Server
 async function startServer(){
     const distPath = path.resolve(process.cwd(),'dist');
     const hasDist = fs.existsSync(distPath);
 
-    if(process.env.NODE_ENV==='production' || hasDist){
+    if(process.env.NODE_ENV==='production' && hasDist){
         app.use(express.static(distPath));
         app.get('*',(req,res)=>{
             res.sendFile(path.join(distPath,'index.html'));
@@ -62,10 +63,15 @@ async function startServer(){
             app.use(vite.middlewares);
         } catch (err) {
             console.warn('[Vite Middleware] Running in API-only or standalone mode:',err);
+            if (hasDist) {
+                app.use(express.static(distPath));
+                app.get('*',(req,res)=>{
+                    res.sendFile(path.join(distPath,'index.html'));
+                });
+            }
         }
     }
 
-    app.use('/api/*',notFoundHandler);
     app.use(errorHandler);
 
     app.listen(Number(PORT),'0.0.0.0',()=>{
