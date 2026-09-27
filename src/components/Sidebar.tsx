@@ -7,6 +7,8 @@ interface SidebarProps {
   isAnalyzing: boolean;
   onSelectPR: (pr: GitHubPRSummary, owner: string, repo: string) => void;
   onAnalyze: (pr: GitHubPRSummary) => void;
+  provider: LLMProvider;
+  onProviderChange: (p: LLMProvider) => void;
 }
 
 const DEFAULT_PRS: GitHubPRSummary[] = MOCK_PRS.map(pr => ({

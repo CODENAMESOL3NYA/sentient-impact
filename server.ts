@@ -50,7 +50,9 @@ async function startServer(){
 
     if(process.env.NODE_ENV==='production' && hasDist){
         app.use(express.static(distPath));
-        app.get('*',(req,res)=>{
+        // Exclude /api/* from the SPA fallback so unknown API routes reach
+        // the notFoundHandler below instead of returning index.html with a 200.
+        app.get(/^(?!\/api\/).*$/, (_req, res) => {
             res.sendFile(path.join(distPath,'index.html'));
         });
     }else{

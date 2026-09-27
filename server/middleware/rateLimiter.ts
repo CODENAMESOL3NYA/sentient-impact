@@ -14,38 +14,63 @@ interface ClientRateRecord {
 /**
  * Lightweight in-memory rate limiter middleware for Express routes.
  */
-export function createRateLimiter(options: RateLimiterOptions) {
-  const {
-    windowMs = 60_000,
-    maxRequests = 30,
-    message = 'Too many requests, please try again later.',
-  } = options;
+export function createRateLimiter(options: RateLimiterOptions = {}): RequestHandler {
+    const windowMs   = options.windowMs   ?? 60_000;
+    const maxRequests = options.maxRequests ?? 30;
+    const message    = options.message    ?? 'Too many requests — please try again later.';
 
-  const clients = new Map<string, ClientRateRecord>();
+    const store = new Map<string, RateLimitEntry>();
 
-  return function rateLimiterMiddleware(req: Request, res: Response, next: NextFunction): void {
-    const now = Date.now();
-    const key = req.ip || req.socket.remoteAddress || 'global';
-    const record = clients.get(key);
+    // Periodic sweep: remove entries whose window has already expired.
+    const sweepInterval = setInterval(() => {
+        const now = Date.now();
+        for (const [ip, entry] of store) {
+            if (now - entry.windowStart > windowMs) {
+                store.delete(ip);
+            }
+        }
+    }, windowMs);
 
-    if (!record || now > record.resetAt) {
-      clients.set(key, { count: 1, resetAt: now + windowMs });
-      next();
-      return;
-    }
+    // Allow the Node.js event loop to exit even if this interval is still live.
+    sweepInterval.unref();
 
-    if (record.count >= maxRequests) {
-      res.status(429).json({
-        error: 'RATE_LIMIT_EXCEEDED',
-        statusCode: 429,
-        message,
-        retryAfterMs: Math.max(0, record.resetAt - now),
-        timestamp: new Date().toISOString(),
-      });
-      return;
-    }
+    return function rateLimiter(req: Request, res: Response, next: NextFunction): void {
+        // req.ip respects Express's `trust proxy` setting and is the safest source.
+        // X-Forwarded-For is only read as a fallback and uses the leftmost (client) IP,
+        // which can be spoofed when the server is not behind a trusted reverse proxy.
+        // Set `app.set('trust proxy', 1)` in server.ts if deployed behind a load balancer.
+        const ip  = req.ip
+                 ?? (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0].trim()
+                 ?? req.socket.remoteAddress
+                 ?? 'unknown';
 
-    record.count += 1;
-    next();
-  };
+        const now  = Date.now();
+        const entry = store.get(ip);
+
+        if (!entry || now - entry.windowStart > windowMs) {
+            // First request in a new window.
+            store.set(ip, { count: 1, windowStart: now });
+            next();
+            return;
+        }
+
+        entry.count++;
+
+        if (entry.count > maxRequests) {
+            const retryAfterSec = Math.ceil((windowMs - (now - entry.windowStart)) / 1000);
+            res.setHeader('Retry-After', String(retryAfterSec));
+            res.setHeader('X-RateLimit-Limit',     String(maxRequests));
+            res.setHeader('X-RateLimit-Remaining', '0');
+            res.status(429).json({
+                error:   'RateLimitExceeded',
+                message,
+                retryAfterSeconds: retryAfterSec,
+            });
+            return;
+        }
+
+        res.setHeader('X-RateLimit-Limit',     String(maxRequests));
+        res.setHeader('X-RateLimit-Remaining', String(maxRequests - entry.count));
+        next();
+    };
 }
